@@ -1,0 +1,97 @@
+# Run on a specific set of hosts by providing the argument --extra-vars "target=..."
+- name: Transfer and execute a binary or script.
+  hosts: "{{ target | default('my_servers') }}"
+  become: "{{ root | default(false) | bool }}"
+  gather_facts: false
+  vars_files:
+    - ../vars/settings.yml
+
+  pre_tasks:
+    # --- HELP FEATURE ---
+    # Trigger this with: ansible-playbook playbook.yml -e help=true
+    - name: Display Help Information
+      run_once: true
+      delegate_to: localhost
+      become: false
+      when: help | default(false) | bool
+      block:
+        - name: Show Help Message
+          ansible.builtin.debug:
+            msg:
+              - "USAGE: ansible-playbook playbook.yml -e 'target=group script=/path/to/script'"
+              - ""
+              - "REQUIRED VARIABLES:"
+              - "  script             The local path to the script or binary to execute."
+              - "  local_results_path (In settings.yml) Path where execution logs are stored locally."
+              - ""
+              - "OPTIONAL VARIABLES:"
+              - "  target             Hosts to run against (default: my_servers)."
+              - "  script_args        Arguments to pass to the script."
+              - "  root               Set to 'true' to run with sudo (default: false)."
+              - "  help               Set to 'true' to see this message."
+              - ""
+              - "WHAT THIS PLAYBOOK DOES:"
+              - "  1. Validates that the script variable is provided."
+              - "  2. Copies and executes the script on target hosts."
+              - "  3. Captures STDOUT and STDERR."
+              - "  4. Saves results to a local file per host for auditing."
+
+        - name: End play after help
+          ansible.builtin.meta: end_play
+          
+    # --- VARIABLE VALIDATION ---
+    - name: Ensure required variables are set
+      run_once: true
+      delegate_to: localhost
+      become: false
+      ansible.builtin.assert:
+        that:
+          - script is defined and script | length > 0
+          - local_results_path is defined and local_results_path | length > 0
+        fail_msg: "CRITICAL ERROR: 'script' and 'local_results_path' must be defined. Run with '-e help=true' for usage."
+
+  tasks:
+    - name: Run binary or script
+      ansible.builtin.script: "{{ script }} {{ script_args | default('') }}"
+      when: script is defined and script | length > 0
+      register: shell_output
+      ignore_errors: yes
+
+    - name: Display output to screen
+      debug:
+        msg: 
+          - "STDOUT:"
+          - "{{ shell_output.stdout_lines | default('No output') }}"
+          - "STDERR:"
+          - "{{ shell_output.stderr_lines | default('No errors') }}"
+
+    # --- ADD THIS TASK ---
+    - name: Ensure local results directory exists
+      delegate_to: localhost
+      become: no
+      ansible.builtin.file:
+        path: "{{ local_results_path }}/{{ inventory_hostname }}"
+        state: directory
+        mode: '0755'
+
+    - name: Save output to local file
+      delegate_to: localhost
+      become: no
+      ansible.builtin.copy:
+        content: |
+          HOST: {{ inventory_hostname }}
+          COMMAND: {{ script }} {{ script_args | default('') }}
+          --- STDOUT ---
+          {{ shell_output.stdout | default('') }}
+          
+          --- STDERR ---
+          {{ shell_output.stderr | default('') }}
+        dest: "{{ local_results_path }}/{{ inventory_hostname }}/execution.log"
+      when: shell_output is defined
+
+    - name: Final Log Location Summary
+      run_once: true
+      delegate_to: localhost
+      become: no
+      debug:
+        msg: "Execution logs are saved in: {{ local_results_path }}/{{ inventory_hostname }}/execution.log"

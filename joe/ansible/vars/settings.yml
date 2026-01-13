@@ -1,0 +1,26 @@
+# all config paths are usually relative to the playbook yaml file
+
+
+# ---- GLOBAL CONFIGS
+#target: ""
+
+
+# ---- RECON SCRIPT CONFIGS
+remote_recon_script: "../../recon/posixInventory.sh"
+source_folder: "/zxc/"
+temp_archive: "/tmp/zxc_bundle.tar.gz"
+local_results_path: "../results"
+
+
+
+# ----- script_run CONFIGS
+#script: "../../tools/normalize.sh"
+#script_args: 
+#root=true/false
+
+
+# ----- fix_users CONFIGS
+root_pass: ""
+admin_pass: ""
+pubkey: ""
+admin_user: "pace"

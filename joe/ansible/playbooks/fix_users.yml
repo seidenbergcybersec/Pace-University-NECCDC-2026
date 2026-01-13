@@ -1,0 +1,132 @@
+---
+- name: IAM Hardening
+  hosts: "{{ target | default('my_servers') }}"
+  become: yes
+  gather_facts: yes # Needed to detect OS family for SSH service name
+  
+  # 1. Safety Check: Stop if variables aren't provided via -e
+  pre_tasks:
+    - name: Ensure required variables are provided
+      fail:
+        msg: "Missing variables! Usage: ansible-playbook playbook.yml -e 'root_pass=... admin_pass=... pubkey=...'"
+      when: >
+        root_pass is undefined or root_pass == "" or
+        admin_pass is undefined or admin_pass == "" or
+        pubkey is undefined or pubkey == ""
+
+  vars_files:
+    - ../vars/settings.yml
+
+  tasks:
+    # 2. Create Admin User (SSH Key Only)
+    - name: Create admin user
+      user:
+        name: "{{ admin_user }}"
+        # Hash happens on your local machine
+        password: "{{ admin_pass | password_hash('sha512') }}"
+        shell: "{{ '/bin/ash' if ansible_os_family == 'Alpine' else '/bin/bash' }}"
+        state: present
+        create_home: yes
+
+    - name: Grant sudo privileges to admin
+      copy:
+        dest: "/etc/sudoers.d/{{ admin_user }}"
+        content: "{{ admin_user }} ALL=(ALL) NOPASSWD:ALL"
+        mode: '0440'
+        validate: /usr/sbin/visudo -cf %s
+
+    - name: Set up authorized key for admin
+      authorized_key:
+        user: "{{ admin_user }}"
+        key: "{{ pubkey }}"
+        state: present
+        exclusive: yes
+
+    # 3. Update Root Password (Different from Admin)
+    - name: Update root password
+      user:
+        name: root
+        password: "{{ root_pass | password_hash('sha512') }}"
+
+    # 4. Disable Human Users (UID >= 1000)
+    - name: Get all local users
+      getent:
+        database: passwd
+
+    - name: Lock non-essential users
+      user:
+        name: "{{ item.key }}"
+        password_lock: yes
+        shell: /sbin/nologin
+      loop: "{{ ansible_facts.getent_passwd | dict2items }}"
+      when:
+        - item.value[1] | int >= 1000
+        - item.key != admin_user
+        - item.key != "nobody"
+        - item.key != ansible_user          # <--- DO NOT LOCK THE CURRENT LOGGED-IN USER
+        - item.key != ansible_env.USER      # <--- SECOND SAFETY CHECK
+        - "'blackteam' not in item.key"
+        - "'black_team' not in item.key"
+
+    # 5. Strict SSH Hardening
+    - name: Configure SSHD
+      copy:
+        dest: /etc/ssh/sshd_config
+        backup: yes
+        content: |
+          # Disable root login entirely
+          PermitRootLogin no
+          # Only allow the new admin user to SSH in
+          AllowUsers {{ admin_user }}
+          # Force SSH Key Authentication
+          PasswordAuthentication no
+          PubkeyAuthentication yes
+          # General Hardening
+          PermitEmptyPasswords no
+          ChallengeResponseAuthentication no
+          UsePAM yes
+          X11Forwarding no
+          PrintMotd no
+      notify: Restart SSH Service
+
+  handlers:
+    - name: Restart SSH Service
+      service:
+        name: "{{ 'sshd' if (ansible_os_family == 'RedHat' or ansible_os_family == 'Alpine') else 'ssh' }}"
+        state: restarted
+
+  post_tasks:
+    - name: Display Cleanup Instructions
+      debug:
+        msg:
+          - "################################################################"
+          - "IAM HARDENING COMPLETE"
+          - "################################################################"
+          - "The new admin account '{{ admin_user }}' has been created."
+          - "You are currently still logged in as '{{ ansible_user }}'."
+          - ""
+          - "VERIFICATION STEPS:"
+          - "1. Open a NEW terminal window (do not close this one yet!)."
+          - "2. Test the new account: ssh {{ admin_user }}@{{ ansible_host }}"
+          - "3. Verify sudo access: sudo -i"
+          - ""
+          - "FINAL STEPS:"
+          - "2. Once confirmed working, DISABLE this old account ('{{ ansible_user }}') manually:"
+          - ""
+          - "   COMMAND: sudo usermod --lock --shell /sbin/nologin {{ ansible_user }}"
+          - ""
+          - "3. To verify the account is disabled, run:"
+          - "   sudo passwd -S {{ ansible_user }}"
+          - "   (Should show 'L' for Locked)"
+          - "################################################################"
+          
+          - "---------------------------------------------------------------"
+          - "IAM HARDENING SUMMARY OF CHANGES:"
+          - "1. ADMIN CREATED: User '{{ admin_user }}' added with sudo & SSH keys."
+          - "2. ROOT SECURED: Root password updated and SSH login disabled."
+          - "3. USERS LOCKED: All UID >= 1000 accounts locked (except {{ ansible_user }} & {{ admin_user }})."
+          - "4. SSH UPDATED: Config overwritten. Key-auth only (NO PASSWORDS). AllowUsers restricted."
+          - "---------------------------------------------------------------"
+          - "IF THINGS GO SOUTH: Log in via console/IPMI as root with new password,"
+          - "restore /etc/ssh/sshd_config.bak, and check /etc/sudoers.d/."
+          - "---------------------------------------------------------------"

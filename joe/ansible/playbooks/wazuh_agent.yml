@@ -1,0 +1,141 @@
+- name: Install and configure Wazuh Agent
+  hosts: "{{ target | default('my_servers') }}"
+  gather_facts: yes
+  vars_files:
+    - ../vars/settings.yml
+  vars:
+    wazuh_version: "4.14.1-1"
+    wazuh_manager_ip: ""
+
+  tasks:
+    - name: Ensure that wazuh_manager_ip is defined
+      assert:
+        that:
+          - wazuh_manager_ip is defined
+          - wazuh_manager_ip != ""
+        fail_msg: "'wazuh_manager_ip' is empty. Please provide the Wazuh server IP."
+
+    # --- Debian / Ubuntu Section ---
+    - name: Install Wazuh agent on Ubuntu/Debian
+      when: ansible_os_family == "Debian"
+      become: yes
+      block:
+        - name: Install Wazuh agent DEB package
+          apt:
+            deb: "https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_{{ wazuh_version }}_amd64.deb"
+
+        - name: Configure Wazuh agent
+          replace:
+            path: "/var/ossec/etc/ossec.conf"
+            regexp: 'MANAGER_IP'
+            replace: "{{ wazuh_manager_ip }}"
+
+        - name: Reload systemd and enable wazuh-agent service
+          systemd:
+            name: wazuh-agent
+            enabled: yes
+            state: started
+
+    # --- RedHat / CentOS / Fedora Section ---
+    - name: Install Wazuh agent on Fedora/CentOS
+      when: ansible_os_family == "RedHat"
+      become: yes
+      block:
+        - name: Import Wazuh GPG key
+          rpm_key:
+            key: https://packages.wazuh.com/key/GPG-KEY-WAZUH
+            state: present
+
+        - name: Install Wazuh agent RPM package
+          dnf:
+            name: "https://packages.wazuh.com/4.x/yum/wazuh-agent-{{ wazuh_version }}.x86_64.rpm"
+            state: present
+
+        - name: Configure Wazuh agent
+          replace:
+            path: "/var/ossec/etc/ossec.conf"
+            regexp: 'MANAGER_IP'
+            replace: "{{ wazuh_manager_ip }}"
+
+        - name: Reload systemd and enable wazuh-agent service
+          systemd:
+            name: wazuh-agent
+            enabled: yes
+            state: started
+
+    # --- Alpine Section ---
+    - name: Install Wazuh agent on Alpine
+      when: ansible_os_family == "Alpine"
+      become: yes
+      block:
+        - name: Import Wazuh repository key
+          get_url:
+            url: "https://packages.wazuh.com/key/alpine-devel@wazuh.com-633d7457.rsa.pub"
+            dest: "/etc/apk/keys/alpine-devel@wazuh.com-633d7457.rsa.pub"
+
+        - name: Add Wazuh repository
+          lineinfile:
+            path: /etc/apk/repositories
+            line: "https://packages.wazuh.com/4.x/alpine/v3.12/main"
+
+        - name: Update APK repositories
+          command: apk update
+
+        - name: Install Wazuh agent on Alpine
+          apk:
+            name: wazuh-agent=4.8.2-r1
+            state: present
+
+        - name: Configure Wazuh agent
+          replace:
+            path: "/var/ossec/etc/ossec.conf"
+            regexp: 'MANAGER_IP'
+            replace: "{{ wazuh_manager_ip }}"
+
+        - name: Start Wazuh agent
+          command: /var/ossec/bin/wazuh-control start
+
+    # --- FreeBSD Section ---
+    - name: Install Wazuh agent on FreeBSD
+      when: ansible_os_family == "FreeBSD"
+      become: yes
+      block:
+        - name: Install the Wazuh agent package
+          community.general.pkgng:
+            name: wazuh-agent
+            state: present
+
+        - name: Configure Wazuh agent
+          replace:
+            path: "/var/ossec/etc/ossec.conf"
+            regexp: '<address>IP</address>'
+            replace: "<address>{{ wazuh_manager_ip }}</address>"
+
+        - name: Ensure Wazuh agent uses to TCP
+          replace:
+            path: "/var/ossec/etc/ossec.conf"
+            regexp: '<protocol>.*</protocol>'
+            replace: "<protocol>tcp</protocol>"
+
+        - name: Enable and start wazuh-agent service
+          service:
+            name: wazuh-agent
+            enabled: yes
+            state: started
+
+    # --- Windows Section ---
+    - name: Install Wazuh agent on Windows
+      when: ansible_os_family == "Windows"
+      block:
+        - name: Download Wazuh agent MSI package
+          win_get_url:
+            url: "https://packages.wazuh.com/4.x/windows/wazuh-agent-{{ wazuh_version }}.msi"
+            dest: "C:\\wazuh-agent-{{ wazuh_version }}.msi"
+
+        - name: Install Wazuh agent using MSI
+          win_command: "msiexec /i C:\\wazuh-agent-{{ wazuh_version }}.msi /q WAZUH_MANAGER=\"{{ wazuh_manager_ip }}\""
+
+        - name: Start Wazuh service
+          win_service:
+            name: WazuhSvc
+            state: started

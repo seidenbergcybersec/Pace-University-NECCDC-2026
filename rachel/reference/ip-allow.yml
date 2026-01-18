@@ -1,0 +1,8 @@
+http:
+  middlewares:
+    ip-whitelist:
+      ipWhiteList:
+        sourceRange:
+          - "127.0.0.1/32"
+
+#docker/traefik/dynamic/thisfile

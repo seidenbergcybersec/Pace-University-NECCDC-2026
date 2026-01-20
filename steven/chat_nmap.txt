@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+#
+# nmap_and_scp.sh
+#
+# This script:
+# 1. Runs Nmap on a list of subnets.
+# 2. Outputs scans in multiple formats (normal, XML, and grepable) using -oA.
+# 3. Compresses results.
+# 4. Copies them via scp to a remote host.
+
+# =====================
+#  USER-DEFINED VARIABLES
+# =====================
+
+# List of subnets to scan (add or remove as needed)
+SUBNETS=(
+    "192.168.1.0/24"
+    "192.168.2.0/24"
+    # Add more subnets here...
+)
+
+# Directory to store results locally on the VM
+OUTPUT_DIR="$HOME/nmap_results"
+
+# Remote server settings
+REMOTE_USER="your_username"
+REMOTE_HOST="192.168.0.10"
+REMOTE_PATH="/path/on/host/machine"
+
+# =====================
+#  SCRIPT START
+# =====================
+
+# Ensure the output directory exists
+mkdir -p "$OUTPUT_DIR"
+
+# Create a timestamped folder to avoid overwriting old results
+TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
+RESULTS_DIR="$OUTPUT_DIR/nmap_$TIMESTAMP"
+mkdir -p "$RESULTS_DIR"
+
+echo "[*] Starting Nmap scans..."
+
+# Iterate over each subnet
+for SUBNET in "${SUBNETS[@]}"; do
+  # Replace slashes with underscores for the filename
+  FILENAME=$(echo "$SUBNET" | tr '/' '_')
+  
+  echo "    Scanning $SUBNET..."
+  # The -oA option outputs to three formats: .nmap (normal), .xml, and .gnmap
+  # Example options: -sV for version detection, -Pn if no ping, etc.
+  # Adjust as desired based on your scanning needs.
+  nmap -sV -oA "${RESULTS_DIR}/${FILENAME}" "$SUBNET"
+done
+
+echo "[*] Nmap scans completed."
+
+# Optional: compress the entire results directory for easier transfer
+echo "[*] Compressing results..."
+tar -czf "${RESULTS_DIR}.tar.gz" -C "$OUTPUT_DIR" "nmap_$TIMESTAMP"
+
+# Use scp to copy the compressed file to your host machine
+# Make sure you have SSH keys set up or be prepared to enter a password
+echo "[*] Transferring results to remote host..."
+scp "${RESULTS_DIR}.tar.gz" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}"
+
+if [ $? -eq 0 ]; then
+    echo "[+] Transfer successful!"
+else
+    echo "[-] Transfer failed. Check your network or credentials."
+fi
+
+echo "[*] All done!"

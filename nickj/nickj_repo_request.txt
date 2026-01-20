@@ -1,0 +1,15 @@
+https://github.com/champcybersec/ccdc2026/tree/629cce0377758a81c25c1cd21fc10d307ffe7680/windows
+
+https://github.com/gravitational/teleport/tree/master
+
+https://github.com/gravitational/teleport/blob/master/docs/pages/enroll-resources/desktop-access/active-directory.mdx
+
+https://github.com/NE-Collegiate-Cyber-Defense-League/neccdc-2024-public (found some stuff on ansible here)
+
+https://github.com/NE-Collegiate-Cyber-Defense-League/blue-team-resources (additional windows guides that can be useful)
+
+https://github.com/BYU-CCDC/public-ccdc-resources
+
+https://github.com/csamnsu/CCDC_public
+
+https://github.com/BYU-CCDC/public-ccdc-resources/blob/main/open-source-security-repos.md

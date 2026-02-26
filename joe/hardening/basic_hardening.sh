@@ -179,4 +179,4 @@ harden_php
 # configure_firewall
 restart_web_services
 
-echo "PART 2 COMPLETE."
+echo "Basic Hardening Complete"

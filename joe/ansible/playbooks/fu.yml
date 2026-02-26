@@ -1,0 +1,235 @@
+---
+- name: IAM Hardening with Reporting
+  hosts: "{{ target | default('my_servers') }}"
+  become: yes
+  gather_facts: yes
+
+  pre_tasks:
+    - name: Ensure required variables are provided
+      fail:
+        msg: "Missing variables! Usage: ansible-playbook playbook.yml -e 'root_pass=... admin_pass=... pubkey=...'"
+      when: >
+        root_pass is undefined or root_pass == "" or
+        admin_pass is undefined or admin_pass == "" or
+        pubkey is undefined or pubkey == ""
+
+    - name: Set facts for reporting
+      set_fact:
+        report_timestamp: "{{ lookup('pipe', 'date +%Y-%m-%d_%H-%M-%S') }}"
+        report_dir: "../results/{{ inventory_hostname }}/fix_users_results"
+
+    - name: Create local report directory
+      delegate_to: localhost
+      become: no
+      file:
+        path: "{{ report_dir }}"
+        state: directory
+        mode: '0755'
+
+  vars_files:
+    - ../vars/settings.yml
+
+  tasks:
+    # --- 1. CAPTURE "BEFORE" STATE ---
+    - name: Capture SSH config (Before)
+      slurp:
+        src: /etc/ssh/sshd_config
+      register: ssh_before
+
+    - name: Capture Sudo Users (Before)
+      shell: "grep -Po '^sudo:.*:\\K.*|^wheel:.*:\\K.*' /etc/group"
+      register: sudo_users_before
+      failed_when: false
+
+    # --- 2. ADMIN CREATION ---
+    - name: Create admin user
+      user:
+        name: "{{ admin_user }}"
+        password: "{{ admin_pass | password_hash('sha512') }}"
+        shell: "{{ '/bin/ash' if ansible_os_family == 'Alpine' else '/bin/bash' }}"
+        state: present
+        groups: "{{ 'wheel' if (ansible_os_family == 'RedHat' or ansible_os_family == 'Suse') else 'sudo' }}"
+        append: yes
+        create_home: yes
+
+    - name: Grant sudo privileges to admin
+      copy:
+        dest: "/etc/sudoers.d/{{ admin_user }}"
+        content: "{{ admin_user }} ALL=(ALL) NOPASSWD:ALL"
+        mode: '0440'
+        validate: /usr/sbin/visudo -cf %s
+
+    - name: Set up authorized key for admin
+      authorized_key:
+        user: "{{ admin_user }}"
+        key: "{{ pubkey }}"
+        state: present
+        exclusive: yes
+
+    - name: Remove nobody's shell
+      user:
+        name: "nobody"
+        shell: /sbin/nologin
+      ignore_errors: yes
+
+    - name: Create custom nologin message
+      copy:
+        dest: /etc/nologin.txt
+        content: |
+          -------------------------------------------------------------------
+          SECURITY ALERT:
+          This account has been locked due to suspicion of malicious activity.
+          Please reach out to the IT Security Team immediately to verify 
+          your identity and request access.
+          -------------------------------------------------------------------
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Create SSH Banner message
+      copy:
+        dest: /etc/ssh/banner.txt
+        content: |
+          Unauthorized access is prohibited. All activity is monitored.
+          If your account is locked, contact IT Security.
+        owner: root
+        group: root
+        mode: '0644'
+
+    # --- 3. LOCK USERS ---
+    - name: Get local users
+      getent:
+        database: passwd
+
+    - name: Lock non-essential users
+      user:
+        name: "{{ item.key }}"
+        password_lock: yes
+        shell: /sbin/nologin
+      register: locked_users_result
+      loop: "{{ ansible_facts.getent_passwd | dict2items }}"
+      when:
+        - item.value[1] | int >= 1000
+        - item.key != admin_user
+        - item.key != "nobody"
+        - item.key != ansible_user
+        - item.key != ansible_env.USER
+        - "'blackteam' not in item.key"
+        - "'black_team' not in item.key"
+        - "'black-team' not in item.key"
+
+    # --- 4. PURGE PRIVILEGES FROM OTHERS ---
+    - name: Find all files in sudoers.d
+      find:
+        paths: /etc/sudoers.d
+        file_type: any
+      register: sudoers_files
+
+    - name: Remove non-admin sudoers files
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ sudoers_files.files }}"
+      when: 
+        - item.path | basename != blackteam
+        - item.path | basename != black_team
+        - item.path | basename != black-team
+        - item.path | basename != ansible_user
+        - item.path | basename != ansible_env.USER
+        - item.path | basename != admin_user
+        - item.path | basename != "README"
+
+    - name: Remove human users from sudo/wheel groups
+      shell: "gpasswd -d {{ item.key }} {{ 'wheel' if (ansible_os_family == 'RedHat' or ansible_os_family == 'Suse') else 'sudo' }}"
+      loop: "{{ ansible_facts.getent_passwd | dict2items }}"
+      when:
+        - item.value[1] | int >= 1000
+        - item.key != admin_user
+        - item.key != ansible_user
+        - item.key != ansible_env.USER
+        - "'blackteam' not in item.key"
+        - "'black_team' not in item.key"
+        - "'black-team' not in item.key"
+      failed_when: false # Ignore if user wasn't in the group
+
+    # --- 5. SSH HARDENING ---
+    - name: Configure SSHD
+      copy:
+        dest: /etc/ssh/sshd_config
+        backup: yes
+        content: |
+          PermitRootLogin no
+          AllowUsers {{ admin_user }}
+          PasswordAuthentication no
+          PubkeyAuthentication yes
+          Banner /etc/ssh/banner.txt
+          PermitEmptyPasswords no
+          ChallengeResponseAuthentication no
+          UsePAM yes
+          X11Forwarding no
+          PrintMotd no
+      notify: Restart SSH Service
+
+    # --- 6. ROOT PASSWORD ---
+    - name: Update root password
+      user:
+        name: root
+        password: "{{ root_pass | password_hash('sha512') }}"
+
+    # --- 7. CAPTURE "AFTER" STATE ---
+    - name: Capture SSH config (After)
+      slurp:
+        src: /etc/ssh/sshd_config
+      register: ssh_after
+
+    - name: Capture Sudo Users (After)
+      shell: "grep -Po '^sudo:.*:\\K.*|^wheel:.*:\\K.*' /etc/group"
+      register: sudo_users_after
+      failed_when: false
+
+  handlers:
+    - name: Restart SSH Service
+      service:
+        name: "{{ 'sshd' if (ansible_os_family == 'RedHat' or ansible_os_family == 'Suse') else 'ssh' }}"
+        state: restarted
+
+  post_tasks:
+    - name: Generate report content
+      set_fact:
+        final_report: |
+          IAM Hardening Report
+          Target Box: {{ inventory_hostname }}
+          Timestamp: {{ report_timestamp }}
+          ---------------------------------------------------
+          
+          USERS LOCKED/CHANGED:
+          {% for item in locked_users_result.results %}
+          {% if item.changed %}
+          - {{ item.item.key }}
+          {% endif %}
+          {% endfor %}
+          
+          SUDO USERS (BEFORE):
+          {{ sudo_users_before.stdout | default('None') }}
+          
+          SUDO USERS (AFTER):
+          {{ sudo_users_after.stdout | default('None') }}
+          
+          ---------------------------------------------------
+          SSHD CONFIG (BEFORE):
+          {{ ssh_before.content | b64decode }}
+          
+          ---------------------------------------------------
+          SSHD CONFIG (AFTER):
+          {{ ssh_after.content | b64decode }}
+
+    - name: Write report to admin box
+      delegate_to: localhost
+      become: no
+      copy:
+        content: "{{ final_report }}"
+        dest: "{{ report_dir }}/{{ report_timestamp }}.txt"
+
+    - name: Final Summary
+      debug:
+        msg: "Report saved to {{ report_dir }}/{{ report_timestamp }}.txt"

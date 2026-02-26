@@ -1,9 +1,19 @@
-#!/bin/sh
+#!/bin/bash
+
+# --- BASH SETTINGS ---
+set -u
+shopt -s extglob
+
+# --- COLORS ---
+RED='\033[1;31m'
+BLUE='\033[1;34m'
+GREEN='\033[1;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
 
 # --- 0. ENSURE ROOT PRIVILEGES ---
-if [ "$(id -u)" -ne 0 ]; then
-    # POSIX printf is used instead of echo -e for consistent color output
-    printf '\033[1;31mMust be run as root, exiting!\033[0m\n'
+if [[ $EUID -ne 0 ]]; then
+    printf "${RED}Must be run as root, exiting!${NC}\n"
     exit 1
 fi
 
@@ -12,249 +22,269 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 OUT_DIR="/zxc/inventory_$TIMESTAMP"
 BACKUP_DIR="/zxc/sys_backups_$TIMESTAMP"
 
-# mkdir -p is standard
-mkdir -p "$OUT_DIR" "$BACKUP_DIR"
-mkdir -p "$OUT_DIR/configs" "$OUT_DIR/db" "$OUT_DIR/persistence" "$OUT_DIR/unit_files"
+# Create directory structure
+mkdir -p "$OUT_DIR"/{configs,db,persistence,unit_files,docker_inspect,teleport,falco,nginx,alloy} "$BACKUP_DIR"
 
 # --- HELPER FUNCTIONS ---
 header() {
-    printf '\n\033[1;34m[#] %s\033[0m\n' "$1"
+    printf "\n${BLUE}[#] %s${NC}\n" "$1"
     printf '==================================================\n'
 }
 
 command_exists() {
-    command -v "$1" >/dev/null 2>&1
+    type "$1" &>/dev/null
 }
 
-# --- 1. IDENTITY & DOMAIN CONTROLLER DISCOVERY ---
+# --- 1. IDENTITY & SYSTEM ---
+header "SYSTEM INFO"
+{
+    echo "Hostname: $HOSTNAME"
+    echo "Kernel: $(uname -a)"
+    [[ -f /etc/os-release ]] && cat /etc/os-release
+} > "$OUT_DIR/os_info.txt"
+
 header "DOMAIN IDENTIFICATION"
 {
     # Samba Check
     if command_exists net; then
-        IP=$(net ads info 2>/dev/null | grep 'LDAP server:' | awk '{print $3}')
-        if [ -n "$IP" ]; then echo "DC address (Samba): $IP"; fi
+        # Using Bash variable assignment from subshell
+        IP=$(net ads info 2>/dev/null | awk '/LDAP server:/ {print $3}')
+        [[ -n "$IP" ]] && echo "DC address (Samba): $IP"
     fi
-    # resolvectl check
+
+    # resolvectl check (Common on Debian/SUSE/RHEL 8+)
     if command_exists resolvectl; then
-        # POSIX grep doesn't support -o or -P reliably; using awk instead
+        # Use Bash pattern matching instead of complex awk where possible
         REALM=$(resolvectl domain | awk '/:/ {print $2}' | tail -n 1)
-        if [ -n "$REALM" ]; then
-            IP=$(resolvectl query "$REALM" 2>/dev/null | grep "$REALM: " | awk '{print $2}')
-            if [ -n "$IP" ]; then echo "DC address (resolvectl): $IP"; fi
+        if [[ -n "$REALM" ]]; then
+            IP=$(resolvectl query "$REALM" 2>/dev/null | awk "/$REALM: / {print \$2}")
+            [[ -n "$IP" ]] && echo "DC address (resolvectl): $IP"
         fi
     fi
-    # Kerberos/SSSD Check
-    if [ -f /etc/krb5.conf ]; then
-        REALM=$(grep 'default_realm' /etc/krb5.conf | awk '{print $3}')
-        echo "Kerberos config found. Default Realm: $REALM"
-    fi
-    if [ -f /etc/sssd/sssd.conf ]; then
-        echo "SSSD Config Found"
-    fi
-} | tee "$OUT_DIR/domain_discovery.txt"
 
-# --- 2. SYSTEM & NETWORKING ---
-header "OS & KERNEL INFO"
-{
-    echo "Hostname: $(hostname)"
-    echo "Kernel: $(uname -a)"
-    if [ -f /etc/os-release ]; then cat /etc/os-release; fi
-} > "$OUT_DIR/os_info.txt"
+    # Kerberos/SSSD Check
+    [[ -f /etc/krb5.conf ]] && echo "Kerberos config found. Realm: $(grep 'default_realm' /etc/krb5.conf | awk '{print $3}')"
+    [[ -f /etc/sssd/sssd.conf ]] && echo "SSSD Config Found"
+
+} | tee "$OUT_DIR/domain_discovery.txt"
 
 header "NETWORK TOPOLOGY & LISTENING"
 {
     echo "--- Interfaces & Routes ---"
     ip addr 2>/dev/null || ifconfig 2>/dev/null
     ip route 2>/dev/null || route -n 2>/dev/null
-    printf '\n--- DNS ---\n'
-    cat /etc/resolv.conf
     
-    printf '\n--- Listening Ports (ss) ---\n'
-    if command_exists ss; then ss -tulpn; fi
-    printf '\n--- Listening Ports (netstat) ---\n'
-    if command_exists netstat; then netstat -tulpn; fi
-    printf '\n--- Listening Ports (lsof) ---\n'
-    if command_exists lsof; then lsof -i -n -P | grep LISTEN; fi
-    printf '\n--- Listening Ports (sockstat) ---\n'
-    if command_exists sockstat; then sockstat; fi
+    printf '\n--- DNS ---\n'
+    [[ -f /etc/resolv.conf ]] && cat /etc/resolv.conf
+    
+    # Check multiple tools in order of preference
+    printf '\n--- Listening Ports ---\n'
+    if command_exists ss; then ss -tulpn;
+    elif command_exists netstat; then netstat -tulpn;
+    elif command_exists lsof; then lsof -i -n -P | grep LISTEN;
+    fi
 } > "$OUT_DIR/network.txt"
 
-# --- 3. FIREWALL RULES ---
-header "FIREWALL CONFIG"
-{
-    echo "--- IPTables ---"
-    if command_exists iptables; then iptables -L -n -v; fi
-    printf '\n--- NFTables ---\n'
-    if command_exists nft; then nft list ruleset; fi
-    printf '\n--- UFW ---\n'
-    if command_exists ufw; then ufw status; fi
-    printf '\n--- Firewalld ---\n'
-    if command_exists firewall-cmd; then firewall-cmd --list-all; fi
-} > "$OUT_DIR/firewall.txt"
 
-# --- 4. SERVICES & CRITICAL CONFIGS ---
-header "SERVICES ENUMERATION"
-FILTER_REGEX="samba|sssd|krb5|wordpress|teleport|nginx|apache|httpd|nfs|mysql|mariadb|postgres|docker|falco|loki|grafana|prometheus|ansible"
+# --- 2. SERVICES ENUMERATION ---
+header "CRITICAL SERVICES ENUMERATION"
+# Expanded Filter Regex per requirements
+FILTER_REGEX="samba|sssd|krb5|wordpress|teleport|nginx|apache|httpd|nfs|mysql|mariadb|postgres|docker|falco|loki|grafana|prometheus|ansible|teleport|docker|nginx|mariadb|mysql|vsftpd|semaphore|alloy|falco|samba|sssd"
 
 {
-    # Check for systemd presence without bash-specific ps flags
-    if [ -d /run/systemd/system ]; then
+    if [[ -d /run/systemd/system ]]; then
         echo "--- HIGH PRIORITY SERVICES ---"
         systemctl list-units --type=service --state=running | grep -Ei "$FILTER_REGEX"
         
         printf '\n--- EXPORTING RUNNING UNIT FILES ---\n'
-        # Get list of running services
-        RUNNING_SERVICES=$(systemctl list-units --type=service --state=running --no-legend --no-pager | awk '{print $1}')
+        readarray -t RUNNING_SERVICES < <(systemctl list-units --type=service --state=running --no-legend --no-pager | awk '{print $1}')
         
-        for svc in $RUNNING_SERVICES; do
+        for svc in "${RUNNING_SERVICES[@]}"; do
+            [[ -z "$svc" ]] && continue
             systemctl cat "$svc" > "$OUT_DIR/unit_files/$svc.service" 2>/dev/null
-            echo "Exported: $svc"
         done
+        echo "Exported ${#RUNNING_SERVICES[@]} unit files."
 
-        printf '\n--- ALL RUNNING SERVICES ---\n'
-        systemctl list-units --type=service --state=running
-        printf '\n--- ALL INSTALLED SERVICES ---\n'
-        systemctl list-unit-files --type=service
     else
-        echo "--- RUNNING PROCESSES (Non-Systemd/OpenRC) ---"
-        ps aux
+        echo "--- RUNNING PROCESSES (Non-Systemd) ---"
+        ps auxf
     fi
 } > "$OUT_DIR/services.txt"
 
-header "EXTRACTING CONFIGS"
-# POSIX doesn't have arrays. We use a space-separated string.
-CONFIG_PATHS="/etc/nginx/nginx.conf /etc/apache2/apache2.conf /etc/httpd/conf/httpd.conf 
-/etc/samba/smb.conf /etc/sssd/sssd.conf /etc/krb5.conf 
-/etc/teleport.yaml /etc/mysql/my.cnf /etc/my.cnf 
-/var/www/html/wp-config.php /etc/ansible/ansible.cfg 
-/etc/prometheus/prometheus.yml /etc/grafana/grafana.ini 
-/etc/falco/falco.yaml"
+# --- 3. DOCKER DEEP DIVE (PODS/CONTAINERS CONFIG) ---
+if command_exists docker; then
+    header "DOCKER DEEP DIVE"
+    {
+        echo "[*] Capturing Docker Network and Daemon Config..."
+        [[ -f /etc/docker/daemon.json ]] && cp /etc/docker/daemon.json "$OUT_DIR/configs/docker_daemon.json"
+        
+        docker ps -a --format "table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}" > "$OUT_DIR/docker_list.txt"
+        
+        echo "[*] Capturing Container Start Commands and Configs..."
+        readarray -t CONTAINERS < <(docker ps -a --format "{{.Names}}")
+        for container in "${CONTAINERS[@]}"; do
+            # This captures EVERYTHING: Mounts, Env, Entrypoint, Cmd, Labels
+            docker inspect "$container" > "$OUT_DIR/docker_inspect/${container}_inspect.json"
+        done
+        
+        docker network inspect $(docker network ls -q) > "$OUT_DIR/docker_inspect/networks.json" 2>/dev/null
+    }
+fi
 
-for cfg in $CONFIG_PATHS; do
-    if [ -f "$cfg" ]; then
-        # Using basename replacement via shell parameter expansion
-        base=$(basename "$cfg")
-        cp "$cfg" "$OUT_DIR/configs/${base}_backup"
+# --- 4. CONFIGURATION EXTRACTION (CRITICAL SERVICES) ---
+header "EXTRACTING SERVICE CONFIGS"
+
+# Array of specific files to pull
+CONFIG_PATHS=(
+    "/etc/samba/smb.conf" "/etc/sssd/sssd.conf" "/etc/krb5.conf"
+    "/etc/vsftpd.conf" "/etc/vsftpd/user_list" "/etc/vsftpd/chroot_list"
+    "/etc/teleport.yaml" "/etc/semaphore/config.json"
+    "/etc/alloy/config.alloy" "/etc/default/alloy"
+    "/etc/falco/falco.yaml" "/etc/falco/falco_rules.yaml" "/etc/falco/falco_rules.local.yaml" "/etc/falco/sidekick.yaml" "/etc/falcosidekick/config.yaml"
+    "/etc/nginx/nginx.conf" "/etc/apache2/apache2.conf" "/etc/httpd/conf/httpd.conf"
+    "/etc/mysql/my.cnf" "/etc/my.cnf"
+    "/var/www/html/wp-config.php" "/etc/ansible/ansible.cfg"
+)
+
+for cfg in "${CONFIG_PATHS[@]}"; do
+    if [[ -f "$cfg" ]]; then
+        cp --parents "$cfg" "$OUT_DIR/configs/" 2>/dev/null
     fi
 done
 
-# --- 5. USERS, SUDOERS & PERSISTENCE ---
+# Special handling for directory-based configs
+[[ -d /etc/nginx/conf.d ]] && cp -r /etc/nginx/conf.d "$OUT_DIR/nginx/"
+[[ -d /etc/nginx/sites-enabled ]] && cp -r /etc/nginx/sites-enabled "$OUT_DIR/nginx/"
+[[ -d /etc/mysql/mariadb.conf.d ]] && cp -r /etc/mysql/mariadb.conf.d "$OUT_DIR/configs/"
+[[ -d /etc/vsftpd ]] && cp -r /etc/vsftpd "$OUT_DIR/configs/"
+[[ -d /var/lib/teleport ]] && cp /var/lib/teleport/*.yaml "$OUT_DIR/teleport/" 2>/dev/null
+
+
+# --- 5. USERS & PERSISTENCE ---
 header "USER & SUDO AUDIT"
 {
     echo "--- Users with Shells ---"
     grep -E 'sh$|bash$|zsh$' /etc/passwd
-    printf '\n--- Sudoers ---\n'
-    if [ -f /etc/sudoers ]; then cat /etc/sudoers; fi
-    if [ -d /etc/sudoers.d ]; then ls /etc/sudoers.d/; fi
-    printf '\n--- NOPASSWD & !Authenticate Sudoers ---\n'
-    if [ -f /etc/sudoers ] || [ -d /etc/sudoers.d ]; then
-        grep -rEi "NOPASSWD|!authenticate" /etc/sudoers /etc/sudoers.d/ 2>/dev/null
-    fi
+    
+    printf '\n--- Sudoers (NOPASSWD) ---\n'
+    grep -rEi "NOPASSWD|!authenticate" /etc/sudoers /etc/sudoers.d/ 2>/dev/null
 } > "$OUT_DIR/users.txt"
 
 header "PERSISTENCE & AUTORUNS"
 {
-    echo "--- Persistence Files ---"
-    ls -la /etc/rc.local /etc/init.d/ /etc/ld.so.preload /etc/modules 2>/dev/null
-    printf '\n--- LD.SO Configuration ---\n'
-    if [ -f /etc/ld.so.conf ]; then cat /etc/ld.so.conf; fi
-    if [ -d /etc/ld.so.conf.d ]; then ls -F /etc/ld.so.conf.d/; fi
-    
-    printf '\n--- Cronjobs ---\n'
-    # Use cut instead of awk for portability where possible
-    for user in $(cut -f1 -d: /etc/passwd); do 
+    # Check Crontabs for all users
+    # getent is standard on RHEL/Debian/SUSE
+    while read -r user; do
         CRON=$(crontab -u "$user" -l 2>/dev/null)
-        if [ -n "$CRON" ]; then echo "User $user: $CRON"; fi
-    done
-    ls -R /etc/cron* 2>/dev/null
+        [[ -n "$CRON" ]] && echo "User $user: $CRON"
+    done < <(getent passwd | cut -d: -f1)
+
 } > "$OUT_DIR/persistence/persistence_list.txt"
 
-# Pack shell configs & PAM
+# Archive shell & PAM configs
 tar -czf "$OUT_DIR/persistence/shell_and_pam_configs.tar.gz" \
-    /etc/pam.d/ \
-    /home/*/.bashrc /home/*/.zshrc /home/*/.profile /home/*/.xinitrc /home/*/.xsession /home/*/.config/autostart/*.desktop \
-    /root/.bashrc /root/.zshrc /root/.profile \
-    2>/dev/null
+    /etc/pam.d/ /root/.bash* /home/*/.bash* 2>/dev/null
+
+
+header "TELEPORT CLUSTER AUDIT"
+if command_exists tctl; then
+    {
+        echo "--- Teleport Auth Status ---"
+        tctl status 2>/dev/null || echo "Could not get status (Auth server may be remote or down)"
+
+        echo -e "\n--- Teleport Users ---"
+        tctl users ls 2>/dev/null
+
+        echo -e "\n--- Connected Boxes (Nodes) ---"
+        tctl nodes ls 2>/dev/null
+
+        echo -e "\n--- Registered Applications ---"
+        tctl apps ls 2>/dev/null
+
+        echo -e "\n--- Database Resources ---"
+        tctl db ls 2>/dev/null
+
+        echo -e "\n--- Active Roles ---"
+        tctl auth ls 2>/dev/null
+
+        # Export raw JSON for detailed analysis
+        tctl nodes ls --format=json > "$OUT_DIR/teleport/nodes_raw.json" 2>/dev/null
+        tctl users ls --format=json > "$OUT_DIR/teleport/users_raw.json" 2>/dev/null
+        tctl apps ls --format=json > "$OUT_DIR/teleport/apps_raw.json" 2>/dev/null
+    } > "$OUT_DIR/teleport/teleport_admin_inventory.txt"
+    echo "[+] Teleport cluster data collected via tctl."
+else
+    echo "[-] tctl not found. This box might not be a Teleport Admin/Auth node."
+fi
+
 
 # --- 6. PRIVILEGE ESCALATION VECTORS ---
 header "PRIVILEGE ESCALATION VECTORS"
 {
     echo "--- SUID Binaries ---"
     find / -perm -4000 -type f 2>/dev/null
-    printf '\n--- Capabilities (Including setuid) ---\n'
-    if command_exists getcap; then getcap -r / 2>/dev/null; fi
-    printf '\n--- World Writable Files ---\n'
-    find / -type f -perm -o+w 2>/dev/null | grep -vE "^/proc|^/sys|^/dev"
+    printf '\n--- Capabilities ---\n'
+    command_exists getcap && getcap -r / 2>/dev/null
 } > "$OUT_DIR/priv_esc.txt"
 
-# --- 7. DOCKER & CONTAINERS ---
-header "CONTAINER ENUMERATION"
+
+# --- 7. DOCKER ---
 if command_exists docker; then
+    header "DOCKER ENUMERATION"
     {
-        echo "--- All Containers (including stopped) ---"
         docker ps -a
-        printf '\n--- Images ---\n'
         docker images
-        printf '\n--- Networks ---\n'
         docker network ls
-        printf '\n--- Compose Files ---\n'
-        find / -name "docker-compose.yml" -o -name "docker-compose.yaml" 2>/dev/null
     } > "$OUT_DIR/docker_info.txt"
 fi
 
-# --- 8. DATABASE AUDIT ---
-header "DATABASE AUDIT"
-if command_exists mysql; then
-    echo "[*] Auditing MySQL..."
-    DB_USER="root"
-    if mysql -u $DB_USER -e "SHOW DATABASES;" > "$OUT_DIR/db/mysql_databases.txt" 2>/dev/null; then
-        mysql -u $DB_USER -e "SELECT user, host FROM mysql.user;" > "$OUT_DIR/db/mysql_users.txt"
-        while read -r db; do
-            if [ "$db" = "Database" ]; then continue; fi
-            echo "Grants for $db" >> "$OUT_DIR/db/mysql_grants.txt"
-            mysql -u $DB_USER -e "SELECT user, host FROM mysql.user WHERE Drop_priv='Y' OR Alter_priv='Y';" >> "$OUT_DIR/db/mysql_grants.txt"
-        done < "$OUT_DIR/db/mysql_databases.txt"
-        mysqldump -u $DB_USER --all-databases > "$BACKUP_DIR/mysql_full.sql" 2>/dev/null
+
+
+# --- 8. DATABASE BACKUP ---
+header "DATABASE AUDIT & BACKUP"
+if command_exists mariadb || command_exists mysql; then
+    # Try to identify if it is MariaDB specifically
+    DB_TYPE="mysql"
+    command_exists mariadb && DB_TYPE="mariadb"
+    
+    echo "[*] Exporting $DB_TYPE Users and Full Dump..."
+    # Attempting export via local socket (requires root)
+    mysql -e "SELECT user, host FROM mysql.user;" > "$OUT_DIR/db/db_users.txt" 2>/dev/null
+    mysqldump --all-databases --single-transaction --quick > "$BACKUP_DIR/${DB_TYPE}_full_backup.sql" 2>/dev/null
+    if [[ $? -eq 0 ]]; then
+        echo "[+] Database backup successful."
+    else
+        echo "[!] Database backup failed (check permissions/socket)."
     fi
 fi
 
-if command_exists psql; then
-    echo "[*] Auditing PostgreSQL..."
-    sudo -u postgres psql -t -c "SELECT datname FROM pg_database;" > "$OUT_DIR/db/psql_databases.txt" 2>/dev/null
-    while read -r db; do
-        if [ -z "$db" ]; then continue; fi
-        # Trimming whitespace in POSIX
-        db_clean=$(echo "$db" | awk '{$1=$1;print}')
-        sudo -u postgres psql -d "$db_clean" -c "SELECT grantor,grantee,table_name,privilege_type FROM information_schema.role_table_grants;" > "$OUT_DIR/db/psql_grants_$db_clean.txt" 2>/dev/null
-    done < "$OUT_DIR/db/psql_databases.txt"
-fi
-
-# --- 9. STORAGE ---
-header "STORAGE & MOUNTS"
+# --- 9. FIREWALL RULES ---
+header "FIREWALL CONFIG"
 {
-    if command_exists lsblk; then lsblk; fi
-    printf '\n--- Mounts ---\n'
-    # 'column' is not always in Alpine; if missing, just cat
-    if command_exists column; then mount | column -t; else mount; fi
-    printf '\n--- FSTAB ---\n'
-    cat /etc/fstab
-} > "$OUT_DIR/storage.txt"
+    command_exists iptables && iptables -L -n -v
+    command_exists nft && nft list ruleset
+    command_exists ufw && ufw status
+    command_exists firewall-cmd && firewall-cmd --list-all
+} > "$OUT_DIR/firewall.txt"
 
-# --- 10. COMMAND AVAILABILITY (LOTL) ---
-header "LOTL BINARIES"
-ls /usr/bin /usr/sbin /bin /sbin > "$OUT_DIR/available_binaries.txt"
 
-# --- FINAL PACKAGING & IMMUTABILITY ---
+
+
+
+# --- FINAL PACKAGING ---
 header "FINALIZING"
+# Backup /etc
 cp -r /etc "$BACKUP_DIR/etc_backup" 2>/dev/null
-REPORT_NAME="/root/inventory_$(hostname)_$TIMESTAMP.tar.gz"
+
+REPORT_NAME="/root/inventory_${HOSTNAME}_${TIMESTAMP}.tar.gz"
 tar -czf "$REPORT_NAME" -C "$OUT_DIR" .
 
-if command_exists chattr; then
-    chattr -R +i "$BACKUP_DIR" 2>/dev/null
-    echo "[+] Backups in $BACKUP_DIR set to immutable (+i)."
-fi
+# Set immutable if available
+#if command_exists chattr; then
+#    chattr -R +i "$BACKUP_DIR" 2>/dev/null
+#    echo "[+] Backups in $BACKUP_DIR set to immutable."
+#fi
 
-printf '\n\033[1;32m[!] Inventory Complete!\033[0m\n'
+printf "\n${GREEN}[!] Inventory Complete!${NC}\n"
 echo "Report: $REPORT_NAME"
 echo "System Backups: $BACKUP_DIR"

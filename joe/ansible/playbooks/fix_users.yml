@@ -67,6 +67,7 @@
         - item.key != ansible_env.USER      # <--- SECOND SAFETY CHECK
         - "'blackteam' not in item.key"
         - "'black_team' not in item.key"
+        - "'black-team' not in item.key"
 
     # 5. Strict SSH Hardening
     - name: Configure SSHD

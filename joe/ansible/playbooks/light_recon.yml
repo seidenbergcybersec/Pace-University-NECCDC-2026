@@ -1,0 +1,53 @@
+- name: Light Recon and Service Version Audit
+  hosts: "{{ target | default('my_servers') }}"
+  become: yes
+  gather_facts: yes
+  vars_files:
+    - ../vars/settings.yml
+
+  vars:
+    # Default local path if not defined in vars_files
+    local_results_path: "../results"
+    # The path to your shell script on the control node
+    local_script_path: "../../recon/inject/lightInventory.sh"
+
+  tasks:
+    - name: 1. Execute Light Recon Script
+      ansible.builtin.script: "{{ local_script_path }}"
+      register: script_output
+      ignore_errors: yes
+
+    - name: 2. Locate Generated Inventory File
+      # We search for the file pattern created by the script: /system_inventory_*.txt
+      ansible.builtin.find:
+        paths: /
+        patterns: "system_inventory_*.txt"
+        file_type: file
+        age: -2m  # Only look for files created in the last 2 minutes
+      register: found_files
+
+    - name: 3. Process and Fetch Results
+      when: found_files.matched > 0
+      block:
+        - name: "Fetch Inventory File to Local Machine"
+          ansible.builtin.fetch:
+            src: "{{ item.path }}"
+            dest: "{{ local_results_path }}/{{ inventory_hostname }}/"
+            flat: yes
+          loop: "{{ found_files.files }}"
+
+        - name: "Cleanup Remote Inventory File"
+          ansible.builtin.file:
+            path: "{{ item.path }}"
+            state: absent
+          loop: "{{ found_files.files }}"
+
+    - name: 4. Final Status Report
+      ansible.builtin.debug:
+        msg: "Recon complete. Files saved to {{ local_results_path }}/{{ inventory_hostname }}/"
+      when: found_files.matched > 0
+
+    - name: 5. Alert if File Not Found
+      ansible.builtin.fail:
+        msg: "The recon script ran, but no output file was found in /"
+      when: found_files.matched == 0

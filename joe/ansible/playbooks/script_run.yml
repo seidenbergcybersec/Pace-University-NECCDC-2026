@@ -74,21 +74,26 @@
         state: directory
         mode: '0755'
 
-    - name: Save output to local file
+    - name: Append output to local audit file
       delegate_to: localhost
       become: no
-      ansible.builtin.copy:
-        content: |
-          HOST: {{ inventory_hostname }}
-          COMMAND: {{ script }} {{ script_args | default('') }}
+      ansible.builtin.blockinfile:
+        path: "{{ local_results_path }}/{{ inventory_hostname }}/execution.log"
+        create: yes
+        marker: "# --- EXECUTION {mark} ({{ ansible_date_time.iso8601 | default('N/A') }}) ---"
+        insertafter: EOF
+        block: |
+          TIMESTAMP: {{ lookup('pipe', 'date "+%Y-%m-%d %H:%M:%S"') }}
+          SCRIPT_PATH: {{ script }}
+          ARGS: {{ script_args | default('None') }}
+          RESULT: {{ 'SUCCESS' if shell_output.rc == 0 else 'FAILED (Exit Code: ' ~ shell_output.rc ~ ')' }}
           --- STDOUT ---
-          {{ shell_output.stdout | default('') }}
+          {{ shell_output.stdout | default('No STDOUT') }}
           
           --- STDERR ---
-          {{ shell_output.stderr | default('') }}
-        dest: "{{ local_results_path }}/{{ inventory_hostname }}/execution.log"
+          {{ shell_output.stderr | default('No STDERR') }}
       when: shell_output is defined
-
+    
     - name: Final Log Location Summary
       run_once: true
       delegate_to: localhost

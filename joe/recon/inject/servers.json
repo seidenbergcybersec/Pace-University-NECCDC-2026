@@ -1,0 +1,23 @@
+[
+    {
+        "hostname": "WEB-SRV-01",
+        "ip": "2001:db8:85a3::8a2e:370:7334",
+        "mac": "00:AA:11:22:33:44",
+        "os": "Ubuntu 22.04",
+        "services": "Nginx, SSH"
+    },
+    {
+        "hostname": "DC-WIN-01",
+        "ip": "10.0.0.5",
+        "mac": "00:BB:11:22:33:44",
+        "os": "Windows Server 2019",
+        "services": "ADDS, DNS"
+    },
+    {
+        "hostname": "FW-01",
+        "ip": "10.0.0.1",
+        "mac": "00:CC:11:22:33:44",
+        "os": "pfsense",
+        "services": "Firewall, VPN"
+    }
+]

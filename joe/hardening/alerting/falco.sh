@@ -11,7 +11,7 @@ cat <<EOF >> /etc/falco/falco_rules.local.yaml
   priority: CRITICAL
 
 - rule: Native SSH Login
-  desc: Detects native SSH usage (Red Team bypasses Teleport)
+  desc: Detects native SSH usage
   condition: >
     evt.type=accept and fd.port=22 and proc.name=sshd
   output: "Native SSH Connection detected (user=%user.name remote_ip=%fd.cip)"

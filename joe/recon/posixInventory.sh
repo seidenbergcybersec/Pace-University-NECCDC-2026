@@ -89,7 +89,7 @@ header "NETWORK TOPOLOGY & LISTENING"
 # --- 2. SERVICES ENUMERATION ---
 header "CRITICAL SERVICES ENUMERATION"
 # Expanded Filter Regex per requirements
-FILTER_REGEX="samba|sssd|krb5|wordpress|teleport|nginx|apache|httpd|nfs|mysql|mariadb|postgres|docker|falco|loki|grafana|prometheus|ansible|teleport|docker|nginx|mariadb|mysql|vsftpd|semaphore|alloy|falco|samba|sssd"
+FILTER_REGEX="samba|sssd|krb5|wordpress|teleport|nginx|apache|httpd|nfs|mysql|mariadb|postgres|docker|falco|loki|grafana|prometheus|ansible|teleport|docker|nginx|mariadb|mysql|vsftpd|semaphore|alloy|falco|samba|sssd|gitea"
 
 {
     if [[ -d /run/systemd/system ]]; then

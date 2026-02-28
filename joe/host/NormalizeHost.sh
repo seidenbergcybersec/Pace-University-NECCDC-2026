@@ -21,7 +21,8 @@ sudo apt install -y ansible
 echo "Installing Go..."
 sudo snap install go --classic
 
-sudo apt install curl
+echo "Installing Basic tools..."
+apt-get install -y coreutils bash curl git net-tools vim wget grep tar jq gpg nano
 
 # Verification
 echo "---------------------------------------"

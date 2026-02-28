@@ -19,7 +19,7 @@ fi
 
 # --- CONFIGURATION ---
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-OUT_FILE="system_inventory_${HOSTNAME}_${TIMESTAMP}.txt"
+OUT_FILE="/system_inventory_${HOSTNAME}_${TIMESTAMP}.txt"
 
 header() {
     printf "\n${BLUE}[#] %s${NC}\n" "$1"
@@ -31,7 +31,6 @@ get_version() {
     local cmd=$1
     local version_args=${2:-"--version"}
     if command -v "$cmd" &>/dev/null; then
-        # Most tools output version to stdout, some to stderr (like nginx/vsftpd)
         "$cmd" $version_args 2>&1 | head -n 1 | sed 's/^[[:space:]]*//'
     else
         echo "Not Installed"
@@ -41,7 +40,6 @@ get_version() {
 # --- 1. NETWORK INTERFACES (IPv4, IPv6, MAC) ---
 header "NETWORK INTERFACE INFO"
 {
-    # Get all non-loopback interfaces
     INTERFACES=$(ip -o link show | awk -F': ' '{print $2}' | grep -v "lo")
 
     for iface in $INTERFACES; do
@@ -49,7 +47,7 @@ header "NETWORK INTERFACE INFO"
         MAC=$(ip link show "$iface" | awk '/ether/ {print $2}')
         IPV4=$(ip -4 addr show "$iface" | awk '/inet / {print $2}')
         IPV6=$(ip -6 addr show "$iface" | awk '/inet6 / {print $2}')
-        
+
         echo "  MAC:  ${MAC:-N/A}"
         echo "  IPv4: ${IPV4:-N/A}"
         echo "  IPv6: ${IPV6:-N/A}"
@@ -76,25 +74,13 @@ header "ESSENTIAL SERVICES INVENTORY"
     printf "%-25s | %s\n" "SERVICE" "VERSION / STATUS"
     printf "%-25s | %s\n" "-------" "----------------"
 
-    # vsftpd
     printf "%-25s | %s\n" "vsftpd" "$(get_version vsftpd "-v")"
-
-    # Teleport (Agent/Admin)
     printf "%-25s | %s\n" "Teleport" "$(get_version teleport "version")"
-
-    # Semaphore
     printf "%-25s | %s\n" "Semaphore" "$(get_version semaphore "version")"
-
-    # Grafana Alloy
     printf "%-25s | %s\n" "Grafana Alloy" "$(get_version alloy "--version")"
-
-    # MariaDB
     printf "%-25s | %s\n" "MariaDB" "$(get_version mariadb "--version")"
-
-    # Nginx
     printf "%-25s | %s\n" "Nginx" "$(get_version nginx "-v")"
 
-    # WordPress (Checked via WP-CLI or common paths)
     if command -v wp &>/dev/null; then
         WP_VER=$(wp core version --allow-root 2>/dev/null || echo "Found, but wp-cli failed")
     elif [[ -f /var/www/html/wp-includes/version.php ]]; then
@@ -104,21 +90,15 @@ header "ESSENTIAL SERVICES INVENTORY"
     fi
     printf "%-25s | %s\n" "WordPress" "$WP_VER"
 
-    # Falco Agent
     printf "%-25s | %s\n" "Falco Agent" "$(get_version falco "--version")"
-
-    # Falco Sidekick (Often a container, checking binary if exists)
     printf "%-25s | %s\n" "Falco Sidekick" "$(get_version falcosidekick "--version")"
-
-    # Grafana
     printf "%-25s | %s\n" "Grafana Server" "$(get_version grafana-server "-v")"
-
-    # Docker
+    printf "%-25s | %s\n" "Gitea" "$(get_version gitea "-v")"
     printf "%-25s | %s\n" "Docker" "$(get_version docker "--version")"
 
 } | tee -a "$OUT_FILE"
 
-# --- 4. DOCKER CHECK (Optional, but useful for these services) ---
+# --- 4. DOCKER CHECK ---
 if command -v docker &>/dev/null; then
     header "DOCKER CONTAINER VERSIONS"
     {
@@ -127,8 +107,86 @@ if command -v docker &>/dev/null; then
     } | tee -a "$OUT_FILE"
 fi
 
-cat "$OUT_FILE"
-echo "\n\n\n"
+# --- 5. JSON GENERATION (for servers.json / draw.io netmap) ---
+header "GENERATING JSON FOR NETMAP"
 
+# Collect primary IP (prefer IPv4, fall back to non-link-local IPv6) and MAC
+JSON_IP="unknown"
+JSON_MAC="unknown"
+for iface in $(ip -o link show | awk -F': ' '{print $2}' | grep -v "lo"); do
+    _ip=$(ip -4 addr show "$iface" | awk '/inet / {print $2}' | cut -d'/' -f1 | head -n1)
+    _mac=$(ip link show "$iface" | awk '/ether/ {print $2}' | head -n1)
+    if [[ -n "$_ip" ]]; then
+        JSON_IP="$_ip"
+        JSON_MAC="${_mac:-unknown}"
+        break
+    fi
+done
+
+# No IPv4 found — fall back to first non-loopback, non-link-local IPv6 address
+if [[ "$JSON_IP" == "unknown" ]]; then
+    for iface in $(ip -o link show | awk -F': ' '{print $2}' | grep -v "lo"); do
+        _ip=$(ip -6 addr show "$iface" | awk '/inet6 / && !/fe80/ {print $2}' | cut -d'/' -f1 | head -n1)
+        _mac=$(ip link show "$iface" | awk '/ether/ {print $2}' | head -n1)
+        if [[ -n "$_ip" ]]; then
+            JSON_IP="$_ip"
+            JSON_MAC="${_mac:-unknown}"
+            break
+        fi
+    done
+fi
+
+# Detect OS identifier for the Python icon map
+JSON_OS="generic"
+if [[ -f /etc/os-release ]]; then
+    source /etc/os-release
+    ID_LOWER=$(echo "${ID:-generic}" | tr '[:upper:]' '[:lower:]')
+    case "$ID_LOWER" in
+        ubuntu)  JSON_OS="ubuntu"  ;;
+        debian)  JSON_OS="debian"  ;;
+        rocky)   JSON_OS="rocky"   ;;
+        rhel|centos|almalinux) JSON_OS="rocky" ;;
+        *)
+            NAME_LOWER=$(echo "${NAME:-}" | tr '[:upper:]' '[:lower:]')
+            if [[ "$NAME_LOWER" == *"windows"* ]]; then
+                JSON_OS="windows"
+            elif [[ "$NAME_LOWER" == *"pfsense"* ]]; then
+                JSON_OS="pfsense"
+            else
+                JSON_OS="linux"
+            fi
+        ;;
+    esac
+fi
+
+# Build the services string from what's actually installed
+INSTALLED_SERVICES=()
+for svc in vsftpd teleport semaphore alloy mariadb nginx falco grafana-server gitea docker; do
+    command -v "$svc" &>/dev/null && INSTALLED_SERVICES+=("$svc")
+done
+if command -v wp &>/dev/null || [[ -f /var/www/html/wp-includes/version.php ]]; then
+    INSTALLED_SERVICES+=("wordpress")
+fi
+
+SERVICES_STR=$(IFS=", "; echo "${INSTALLED_SERVICES[*]}")
+[[ -z "$SERVICES_STR" ]] && SERVICES_STR="Unknown"
+
+# Append JSON block directly to the txt file
+{
+    printf "\n--- servers.json ENTRY (copy object into your array) ---\n"
+    printf '[\n'
+    printf '  {\n'
+    printf '    "hostname": "%s",\n' "${HOSTNAME}"
+    printf '    "ip": "%s",\n'       "${JSON_IP}"
+    printf '    "mac": "%s",\n'      "${JSON_MAC}"
+    printf '    "os": "%s",\n'       "${JSON_OS}"
+    printf '    "services": "%s"\n'  "${SERVICES_STR}"
+    printf '  }\n'
+    printf ']\n'
+} | tee -a "$OUT_FILE"
+
+# --- FINAL SUMMARY ---
 printf "\n${GREEN}[!] Inventory collection complete.${NC}\n"
-echo "Results saved to: $OUT_FILE"
+printf "Results saved to: %s\n" "$OUT_FILE"
+printf "${YELLOW}[i] To add to servers.json: copy the { } object above and append it to your existing array.${NC}\n"
+

@@ -40,6 +40,11 @@
       shell: "grep -Po '^sudo:.*:\\K.*|^wheel:.*:\\K.*' /etc/group"
       register: sudo_users_before
       failed_when: false
+    
+    - name: Capture /etc/passwd (Before)
+      slurp:
+        src: /etc/passwd
+      register: passwd_before
 
     # --- 2. ADMIN CREATION ---
     - name: Create admin user
@@ -132,12 +137,13 @@
         state: absent
       loop: "{{ sudoers_files.files }}"
       when: 
-        - item.path | basename != blackteam
-        - item.path | basename != black_team
-        - item.path | basename != black-team
-        - item.path | basename != ssm-user
+        - item.path | basename != 'blackteam'
+        - item.path | basename != 'black_team'
+        - item.path | basename != 'black-team'
+        - item.path | basename != 'root'
+        - item.path | basename != 'ssm-user'
         - item.path | basename != ansible_user
-        - item.path | basename != ansible_env.USER
+        - item.path | basename != (ansible_env.USER | default('root'))
         - item.path | basename != admin_user
         - item.path | basename != "README"
 
@@ -217,6 +223,10 @@
           
           SUDO USERS (AFTER):
           {{ sudo_users_after.stdout | default('None') }}
+          
+          ---------------------------------------------------
+          PASSWD FILE (BEFORE) - USE FOR SHELL RECOVERY:
+          {{ passwd_before.content | b64decode }}
           
           ---------------------------------------------------
           SSHD CONFIG (BEFORE):

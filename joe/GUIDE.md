@@ -53,7 +53,7 @@ List all ssh nodes:
 `tsh ls`
 
 Use exactly these node names in ansible inventory.ini file like that:
-`ansible_node_name ansible_host=teleport_node_name ansible_user=root`
+`ansible_node_name ansible_host=teleport_node_name.teleport ansible_user=root`
 
 # User level harden
 
@@ -74,12 +74,20 @@ cd ansible/ssh
 Run the user hardening script:
 ```bash
 cd ansible/
-ansible-playbook playbooks/fix_users.yml -e "target=some_target root_pass=NewRoot123 admin_pass=NewAdmin123 pubkey='$(cat ssh/id_rsa.pub)'
+ansible-playbook playbooks/fix_users.yml -e "target=some_target root_pass=NewRoot123 admin_pass=NewAdmin123 pubkey='$(cat ssh/id_rsa.pub)'"
 ```
 
 Lock old account(using teleport access or direct ssh using the new account)
 ```bash
 sudo usermod -L admin
+sudo usermod -s /sbin/nologin debian
+```
+
+If ansible fails cause of old python verision, install new one via Teleport
+```bash
+sudo apt-get install python3.11 -y # debian
+sudo yum install python311 -y # rhel
+zypper install python311 # suse
 ```
 
 MAKE SURE to read through the ssh config and make sure that nothing overrides it. If any additional configs are included(`Include ...`) check them too.
@@ -95,13 +103,13 @@ This service hardening will
 * rebind mariadb to localhost only.
 
 ```bash
-ansible-playbook ansible/playbooks/script_run.yml -e "script=../hardening/specific_hardening.sh root=true"
+ansible-playbook playbooks/script_run.yml -e "script=../../hardening/specific_hardening.sh root=true"
 ```
 
 # Falco alert hardening
 
 ```bash
-ansible-playbook ansible/playbooks/script_run.yml -e "script=../hardening/specific_hardening.sh root=true"
+ansible-playbook playbooks/script_run.yml -e "script=../../hardening/alerting/falco.sh root=true"
 ```
 
 # Basic hardening (optional)
@@ -112,7 +120,7 @@ This basic hardening will
 * enforce strict permissions on /etc/passwd,shadow and others.
 
 ```bash
-ansible-playbook ansible/playbooks/script_run.yml -e "script=../hardening/basic_hardening.sh root=true"
+ansible-playbook playbooks/script_run.yml -e "script=../../hardening/basic_hardening.sh root=true"
 ```
 
 # Crystal hammer deployment
@@ -140,6 +148,12 @@ cd crystal_hammer
 ./deploy.sh
 ```
 
+if the binary is not running due to firewall missing, install one:
+```bash
+sudo apt update && sudo apt install ufw # debian
+sudo dnf install epel-release -y && sudo dnf install ufw # rocky
+sudo zypper install ufw # suse
+```
 
 
 # Recon
@@ -156,7 +170,7 @@ This will collect light information about core services and OS:
 
 ```bash
 cd ansible
-ansible-playbook ansible/playbooks/light_recon.yml -e "target=some_target"
+ansible-playbook playbooks/light_recon.yml -e "target=some_target"
 ```
 
 The resulting file will be in `ansible/results/target/system_inventory_*`
@@ -164,9 +178,7 @@ The resulting file will be in `ansible/results/target/system_inventory_*`
 
 ## Inventory map
 
-After running the light recon script, you should see json code right at the end of `system_inventory_*` file.
-Copy paste this json code into `recon/inject/servers.json`
-After copy pasting all servers, run python script `python3 diagram.py`. This will generate a `competition_network.drawio` file. 
+Run python script `python3 diagram.py --auto` (--auto means that it will traverse the ansible folder and search for results of light_recon script execution). This will generate a `competition_network.drawio` file. 
 Open [diagrams.net](https://app.diagrams.net/) and select File -> Import From -> Device and select the file generated.
 Manually review the network map and reorder/rename boxes/subnets if needed. Use template_subnet to copy paste boxes or subnets if you will need more.
 
@@ -187,7 +199,7 @@ This will:
 * firewall configs backup
 
 ```bash
-ansible-playbook ansible/playbooks/run_recon.yml -e "target=some_target"
+ansible-playbook playbooks/run_recon.yml -e "target=some_target"
 ```
 
 Resulting achive will be in ansible/results/target/

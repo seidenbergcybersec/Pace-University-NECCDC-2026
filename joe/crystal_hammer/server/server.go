@@ -14,38 +14,80 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath" // Added for path manipulation
 	"runtime"
 	"strings"
 	"time"
+	"path/filepath"
 
+	"github.com/creack/pty"
 	"golang.org/x/crypto/ssh"
 )
 
-// --- CONFIGURATION ---
+// --- CONFIGURATION & LOGGING ---
 
-var encodedPubKey = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQCjawcd0SpUKGRpEbZmhyOl79rdEgd+uBKZuvMxEvKiLA5LZncRcLG7+eiNJmyJpO1liG1sjLdoYpjpGTKWj5MmOUpCfb7I8IktmQwCKJLxsH2vakrpvzezxsseulr2SXwPXjmf2sajSbLaLSu3hrxaM54LQXrlzhK0WfAF8izixuT33thygcXjo7WSUTJOmSnPPEyhLQvvfEl3AQXk6SXYzZzxb8w+OEAmJazDuitakIJ9d9uo/e2D0SCihHfFmz3mp9esDUttVrE/C7oBauxEQGDsxZqdhQ9jIpafg9jP4arJDe6qNtMRXSgM8E5hWl0LSJ5hlQrq/IqcaoglLQAVpRI5IbyVF3Ct3G5emQRH/KB2RKPOD+HzyWnldHhrb1SDJeeDLkkEmfWJ68y0k73j5LP7qiZNaLk/ZRZblFxTUxAmrxeZp28+rLCrhG/7jbSIjrX6Tn6Vy131oQA0GSvdk1HBNpp9B/+tHC3gjnjdDtXsZub4WYCB6GbEhAbMQ50tIW32WJoIsiqxeUqCs9k5MoLSK2Nw8nF4JqWBOA9WI3G9Jx/f7jWCIAPZ4i06rVe98VbL+1WK+KIksGp0Z/8xcTaiE7fCU66Y655ODDHSyMW0OaCdtDdDNpzPkCSjfEMYhPoQ+PnK65hmfIZEjkOI36NCDwzHl2uwd3nj2IHxFQ== admin@DESKTOP-V9RAPTR" // <<<MARKING>>>
+var encodedPubKey = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQCzvPNour52StYdBM6Ou8QJhvwqHQwLhkQHMcKTkKs8XkiTuflUlT4jooSHRMZKsYLM6coaczYPAbMLmNU8giEqirxQX7D5+ynxG4Lxpq2R2GXFFqqXY5Za0uBQov/P5jL922FlVLK36sx8xZeCY2HXG3BIynpRdKr1hMBKoaesG4dSEllQFePoVU+gJ11QEYeSDdxtXefw+jUMJkT9wrjHoJzwMhUMt5JC147hNMBZsXIxiUsAVWoGsTSWTSXe7tkTgtyndGKcOJ7rmveD30EZKx3p8OCypiiOnKlpX49VZi2JqAj0D7qxT2zvEOIgiRwg/4HTzPveJygVPaDqNXFglA7myOpqub6SG1cJK9NFirbbkmP+Z9ZgaCQ+mxSfytVO6rRve7WjpGo6doez7U1d22/+XonjZZz3v/C9BuJagjKO9pml0QukhUypz5/4SN6KB8QRvMkxIfpu7wnJ3jM11jd6yNtmpV9KyRyp3fZP1OyLK4dw3xzb9sHFMZjwbs0NPtb8EjV8QokHeIN1PK5KxDrrFRK6a64y9MEOvOnSTgXtoQi3aYdAyM7z92DkYo4pbGTaMe8fiEaOYilzq5Fyuo1bFs0vGP4qkflqYUTckukQGFoTra6SYA6v5fcNJgVuAOMn4ne328lGz8Fn0pSc/7IIA+y0TkaMAdKEnMHKSQ== ubuntu@jumphost" // <<<MARKING>>>
 
-// Global to hold the port used for the listener
-var activePort string
+var (
+	activePort string
+	logTarget  string // "stdout", "file", or "both"
+	logFile    string
+)
 
-// Firewall
+func logEvent(msg string) {
+	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	formatted := fmt.Sprintf("[%s] %s\n", timestamp, msg)
+
+	// Write to stdout (Systemd captures this and sends it to syslog)
+	if logTarget == "stdout" || logTarget == "both" {
+		fmt.Fprint(os.Stdout, formatted)
+	}
+
+	// Write to file
+	if logTarget == "file" || logTarget == "both" {
+		f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err == nil {
+			defer f.Close()
+			f.WriteString(formatted)
+		} else {
+			// If file logging fails, at least tell stdout
+			fmt.Fprintf(os.Stdout, "[%s] CRITICAL: Failed to write to log file: %v\n", timestamp, err)
+		}
+	}
+}
+
 type FirewallType string
 
 const (
 	UFW       FirewallType = "ufw"
 	Firewalld FirewallType = "firewalld"
 	Iptables  FirewallType = "iptables"
+    Nftables  FirewallType = "nftables"
 	Unknown   FirewallType = "unknown"
 )
 
-// --- MODULAR COMMAND REGISTRY ---
+type bufioConn struct {
+	net.Conn
+	r *bufio.Reader
+}
 
-type CommandHandler func(conn net.Conn, args []string)
+func (c *bufioConn) Read(b []byte) (int, error) {
+	return c.r.Read(b)
+}
+
+type nopCloserConn struct {
+	net.Conn
+}
+
+func (n *nopCloserConn) Close() error {
+	return nil
+}
+
+type CommandHandler func(bc *bufioConn, args []string)
 
 var CommandRegistry = make(map[string]CommandHandler)
 
@@ -55,27 +97,28 @@ func init() {
 	CommandRegistry["info"] = handleInfo
 	CommandRegistry["lock"] = handleLock
 	CommandRegistry["unlock"] = handleUnlock
+	CommandRegistry["shellraw"] = handleShellRaw
 	CommandRegistry["shell"] = handleShell
 }
 
 func main() {
 	pFlag := flag.String("p", "9090", "Port to listen on")
+	lTarget := flag.String("log-to", "stdout", "Where to send logs: stdout, file, or both")
+	lFile := flag.String("log-file", "service.log", "Path to log file if log-to is file or both")
 	flag.Parse()
-	activePort = *pFlag // Store in global for handlers
+
+	activePort = *pFlag
+	logTarget = *lTarget
+	logFile = *lFile
 
 	if !HasRootAccess() {
-		fmt.Println("Error: Not running as root. Firewall commands will fail.")
+		logEvent("ERROR: Not running as root. Firewall commands will fail.")
 		os.Exit(1)
-	}
-
-	if detectFirewall() == Unknown {
-		fmt.Println("Firewall is unknown!")
-		os.Exit(2);
 	}
 
 	cert, err := generateInMemCert()
 	if err != nil {
-		fmt.Printf("Cert error: %v\n", err)
+		logEvent(fmt.Sprintf("ERROR: Cert generation failed: %v", err))
 		os.Exit(1)
 	}
 
@@ -84,16 +127,17 @@ func main() {
 
 	listener, err := tls.Listen("tcp", address, config)
 	if err != nil {
-		fmt.Printf("Listen error: %v\n", err)
+		logEvent(fmt.Sprintf("ERROR: Listen failed on %s: %v", address, err))
 		os.Exit(1)
 	}
 	defer listener.Close()
 
-	fmt.Printf("[*] Listening on %s\n", address)
+	logEvent(fmt.Sprintf("Server started on %s. Logging to %s", address, logTarget))
 
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
+			logEvent(fmt.Sprintf("ERROR: Accept failed: %v", err))
 			continue
 		}
 		go handleConnection(conn)
@@ -101,24 +145,33 @@ func main() {
 }
 
 func handleConnection(conn net.Conn) {
+	remoteAddr := conn.RemoteAddr().String()
 	defer conn.Close()
 
 	if !authenticate(conn) {
+		logEvent(fmt.Sprintf("AUTH FAILURE: Failed login attempt from %s", remoteAddr))
 		return
 	}
 
-	conn.Write([]byte("--- AUTHENTICATED SYSTEM READY ---\n> "))
-	reader := bufio.NewReader(conn)
+	logEvent(fmt.Sprintf("AUTH SUCCESS: User logged in from %s", remoteAddr))
+
+	bc := &bufioConn{Conn: conn, r: bufio.NewReader(conn)}
+	bc.Conn.Write([]byte("--- AUTHENTICATED SYSTEM READY ---\n"))
 
 	for {
-		line, err := reader.ReadString('\n')
+		bc.Conn.Write([]byte("> "))
+		line, err := bc.r.ReadString('\n')
 		if err != nil {
+			if err != io.EOF {
+				logEvent(fmt.Sprintf("ERROR: Connection error with %s: %v", remoteAddr, err))
+			} else {
+				logEvent(fmt.Sprintf("SESSION END: Disconnected from %s", remoteAddr))
+			}
 			return
 		}
 
 		line = strings.TrimSpace(line)
 		if line == "" {
-			conn.Write([]byte("> "))
 			continue
 		}
 
@@ -127,34 +180,66 @@ func handleConnection(conn net.Conn) {
 		args := parts[1:]
 
 		if handler, ok := CommandRegistry[cmdName]; ok {
-			handler(conn, args)
+			logEvent(fmt.Sprintf("COMMAND: %s executed '%s' with args %v", remoteAddr, cmdName, args))
+			handler(bc, args)
+
+			if cmdName == "shell" {
+				logEvent(fmt.Sprintf("Closing connection for %s after shell exit", conn.RemoteAddr()))
+				return 
+			}
+			if cmdName == "shellraw" {
+				logEvent(fmt.Sprintf("Raw session (%s) ended for %s", cmdName, remoteAddr))
+			}
 		} else {
-			conn.Write([]byte("Unknown command. Type 'help' for options.\n"))
+			bc.Conn.Write([]byte("Unknown command. Type 'help' for options.\n"))
 		}
-		conn.Write([]byte("> "))
 	}
 }
 
 // --- HANDLERS ---
 
-func handleHelp(conn net.Conn, args []string) {
-	conn.Write([]byte("Available Modules:\n"))
+func handleHelp(bc *bufioConn, args []string) {
+	bc.Conn.Write([]byte("Available Modules: "))
 	for name := range CommandRegistry {
-		conn.Write([]byte(" - " + name + "\n"))
+		bc.Conn.Write([]byte("_" + name + " "))
 	}
+	bc.Conn.Write([]byte("\n"))
 }
 
-func handlePing(conn net.Conn, args []string) {
-	conn.Write([]byte("PONG\n"))
+func handlePing(bc *bufioConn, args []string) {
+	bc.Conn.Write([]byte("PONG\n"))
 }
 
-func handleInfo(conn net.Conn, args []string) {
-	msg := fmt.Sprintf("OS: %s | Arch: %s | CPUs: %d\n", runtime.GOOS, runtime.GOARCH, runtime.NumCPU())
-	conn.Write([]byte(msg))
+func handleInfo(bc *bufioConn, args []string) {
+	fw := detectFirewall()
+	distro := getDistroName()
+	conntrackStatus := "not installed"
+	if _, err := exec.LookPath("conntrack"); err == nil {
+		conntrackStatus = "installed"
+	}
+	msg := fmt.Sprintf(
+		"OS: %s | Arch: %s | CPUs: %d | Distro: %s | Firewall: %s | conntrack: %s\n",
+		runtime.GOOS, runtime.GOARCH, runtime.NumCPU(), distro, string(fw), conntrackStatus,
+	)
+	bc.Conn.Write([]byte(msg))
 }
 
-func handleShell(conn net.Conn, args []string) {
-	conn.Write([]byte("[!] Spawning interactive shell...\n"))
+func getDistroName() string {
+	data, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return "unknown"
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "PRETTY_NAME=") {
+			name := strings.TrimPrefix(line, "PRETTY_NAME=")
+			name = strings.Trim(name, `"`)
+			return name
+		}
+	}
+	return "unknown"
+}
+
+func handleShellRaw(bc *bufioConn, args []string) {
 	var shell string
 	if runtime.GOOS == "windows" {
 		shell = "cmd.exe"
@@ -162,283 +247,458 @@ func handleShell(conn net.Conn, args []string) {
 		shell = "/bin/bash"
 	}
 	cmd := exec.Command(shell)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = conn, conn, conn
-	cmd.Run()
-}
-
-// handleLock updated with error reporting and backup path info
-func handleLock(conn net.Conn, args []string) {
-	conn.Write([]byte("[!] Initiating Firewall LOCKDOWN...\n"))
-
-	// Define a standard backup path
-	backupPath := "/var/backups/firewall_rules.bak"
-
-	// Apply firewall and catch errors
-	err := ApplyStrictFirewall(activePort, backupPath)
-
-	if err != nil {
-		// Report the error to the user without crashing the program
-		errMsg := fmt.Sprintf("[ERROR] Lockdown failed: %v\n", err)
-		conn.Write([]byte(errMsg))
-		return
-	}
-
-	// Success reporting
-	absPath, _ := filepath.Abs(backupPath)
-	successMsg := fmt.Sprintf("[+] Lockdown successful.\n[+] Only port %s is allowed.\n[+] Backup saved to: %s\n", activePort, absPath)
-	conn.Write([]byte(successMsg))
-}
-
-
-func handleUnlock(conn net.Conn, args []string) {
-	conn.Write([]byte("[!] Initiating Firewall UNLOCK/RESTORE...\n"))
-	backupPath := "/var/backups/firewall_rules.bak"
-
-	err := RestoreFirewall(backupPath)
-	if err != nil {
-		conn.Write([]byte(fmt.Sprintf("[ERROR] Unlock failed: %v\n", err)))
-		return
-	}
-
-	conn.Write([]byte("[+] Firewall successfully restored or set to allow all.\n"))
-}
-
-// --- FIREWALL LOGIC ---
-
-
-func RestoreFirewall(backupPath string) error {
-	fw := detectFirewall()
-	_, err := os.Stat(backupPath)
-	backupExists := err == nil
-
-	switch fw {
-	case UFW:
-		// UFW backup in handleLock was just a text status, not a config file.
-		// Best 'unlock' action for UFW is disabling it to allow all.
-		return exec.Command("ufw", "disable").Run()
-
-	case Firewalld:
-		if backupExists {
-			// Restore config directory
-			exec.Command("rm", "-rf", "/etc/firewalld").Run()
-			if err := exec.Command("cp", "-r", backupPath, "/etc/firewalld").Run(); err != nil {
-				return err
-			}
-			return exec.Command("firewall-cmd", "--reload").Run()
-		}
-		// Fallback: Set to trusted zone (allow all)
-		return exec.Command("firewall-cmd", "--set-default-zone=trusted").Run()
-
-	case Iptables:
-		if backupExists {
-			return exec.Command("sh", "-c", "iptables-restore < "+backupPath).Run()
-		}
-		// Fallback: Flush all rules and set policies to ACCEPT
-		exec.Command("iptables", "-F").Run()
-		exec.Command("iptables", "-P", "INPUT", "ACCEPT").Run()
-		exec.Command("iptables", "-P", "FORWARD", "ACCEPT").Run()
-		return exec.Command("iptables", "-P", "OUTPUT", "ACCEPT").Run()
-
-	default:
-		return fmt.Errorf("no supported firewall manager found to unlock")
-	}
-}
-
-
-func ApplyStrictFirewall(port string, backupPath string) error {
-	if !HasRootAccess() {
-		return fmt.Errorf("root privileges required")
-	}
-
-	// Ensure Backup Directory Exists
-	backupDir := filepath.Dir(backupPath)
-	if err := os.MkdirAll(backupDir, 0755); err != nil {
-		return fmt.Errorf("failed to create backup directory %s: %v", backupDir, err)
-	}
-
-	absBackupPath, _ := filepath.Abs(backupPath)
-	fw := detectFirewall()
-
-	KillActiveSSHSessions()
-	switch fw {
-	case UFW:
-		return setupUFW(port, absBackupPath)
-	case Firewalld:
-		return setupFirewalld(port, absBackupPath)
-	case Iptables:
-		return setupIptables(port, absBackupPath)
-	default:
-		return fmt.Errorf("no supported firewall manager found")
-	}
-}
-
-func KillActiveSSHSessions() error {
-	// The pattern "sshd:" matches session processes like "sshd: user@pts/0"
-	// but does NOT match the master daemon "sshd".
-	// -f tells pkill to look at the full command line arguments.
-	cmd := exec.Command("pkill", "-f", "sshd:")
-
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = bc, bc.Conn, bc.Conn
 	err := cmd.Run()
 	if err != nil {
-		// pkill exit status 1 means no processes matched the pattern.
-		// We should treat "no sessions found" as a success or a specific info case.
-		if exitError, ok := err.(*exec.ExitError); ok {
-			waitStatus := exitError.Sys().(syscall.WaitStatus)
-			if waitStatus.ExitStatus() == 1 {
-				return fmt.Errorf("no active SSH sessions found")
-			}
-		}
-		return fmt.Errorf("failed to kill sessions: %v", err)
+		logEvent(fmt.Sprintf("ERROR: ShellRaw failed: %v", err))
+	}
+}
+
+func handleShell(bc *bufioConn, args []string) {
+	hostKey, err := generateSSHHostKey()
+	if err != nil {
+		errMsg := fmt.Sprintf("ERROR: Host key generation failed: %v", err)
+		logEvent(errMsg)
+		bc.Conn.Write([]byte(errMsg + "\n"))
+		return
 	}
 
-	return nil
+	sshConfig := &ssh.ServerConfig{
+		NoClientAuth: true,
+	}
+	sshConfig.AddHostKey(hostKey)
+
+	safeConn := &nopCloserConn{Conn: bc}
+	sshConn, chans, reqs, err := ssh.NewServerConn(safeConn, sshConfig)
+	if err != nil {
+		logEvent(fmt.Sprintf("ERROR: SSH Handshake failed: %v", err))
+		return
+	}
+	
+	go ssh.DiscardRequests(reqs)
+
+	for newChan := range chans {
+		if newChan.ChannelType() != "session" {
+			newChan.Reject(ssh.UnknownChannelType, "unsupported channel type")
+			continue
+		}
+		
+		channel, requests, err := newChan.Accept()
+		if err != nil {
+			logEvent(fmt.Sprintf("ERROR: Failed to accept SSH channel: %v", err))
+			continue
+		}
+
+		handleSSHSession(channel, requests)
+		break 
+	}
+
+    sshConn.Close() 
+    bc.Conn.Write([]byte("\r\n[SSH Session Terminated]\r\n"))
+}
+
+func handleSSHSession(channel ssh.Channel, requests <-chan *ssh.Request) {
+	done := make(chan bool)
+	var ptmx *os.File
+	var cmd *exec.Cmd
+
+	go func() {
+		for req := range requests {
+			switch req.Type {
+			case "pty-req":
+				termLen := req.Payload[3]
+				term := string(req.Payload[4 : 4+termLen])
+				w := binary32(req.Payload[4+termLen:])
+				h := binary32(req.Payload[4+termLen+4:])
+
+				cmd = exec.Command("/bin/bash")
+				cmd.Env = append(os.Environ(), "TERM="+term)
+
+				var err error
+				ptmx, err = pty.Start(cmd)
+				if err != nil {
+					logEvent(fmt.Sprintf("ERROR: PTY Start failed: %v", err))
+					req.Reply(false, nil)
+					return
+				}
+
+				pty.Setsize(ptmx, &pty.Winsize{Cols: uint16(w), Rows: uint16(h)})
+
+				go func() {
+					io.Copy(channel, ptmx)
+					channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
+					channel.Close()
+					done <- true 
+				}()
+
+				go func() {
+					io.Copy(ptmx, channel)
+				}()
+
+				req.Reply(true, nil)
+
+			case "shell":
+				req.Reply(true, nil)
+			case "window-change":
+				if ptmx != nil {
+					w := binary32(req.Payload[0:])
+					h := binary32(req.Payload[4:])
+					pty.Setsize(ptmx, &pty.Winsize{Cols: uint16(w), Rows: uint16(h)})
+				}
+			default:
+				if req.WantReply {
+					req.Reply(false, nil)
+				}
+			}
+		}
+	}()
+
+	<-done
+	if cmd != nil && cmd.Process != nil {
+		cmd.Process.Kill()
+	}
+	if ptmx != nil {
+		ptmx.Close()
+	}
+}
+
+func handleLock(bc *bufioConn, args []string) {
+	err := ApplyStrictFirewall(activePort, "/var/backups/firewall_rules.bak", bc)
+	if err != nil {
+		errMsg := fmt.Sprintf("ERROR: Firewall LOCKDOWN failed: %v", err)
+		logEvent(errMsg)
+		bc.Conn.Write([]byte(errMsg + "\n"))
+	} else {
+		logEvent("SUCCESS: Firewall LOCKDOWN applied.")
+		bc.Conn.Write([]byte("[+] Lockdown successful.\n"))
+	}
+}
+
+func handleUnlock(bc *bufioConn, args []string) {
+	err := RestoreFirewall("/var/backups/firewall_rules.bak")
+	if err != nil {
+		errMsg := fmt.Sprintf("ERROR: Firewall UNLOCK failed: %v", err)
+		logEvent(errMsg)
+		bc.Conn.Write([]byte(errMsg + "\n"))
+	} else {
+		logEvent("SUCCESS: Firewall RESTORED.")
+		bc.Conn.Write([]byte("[+] Firewall restored.\n"))
+	}
+
+	// Re-enable services that were disabled during lockdown
+	for _, svc := range []string{"ssh", "sshd", "teleport"} {
+		enableService(svc, bc)
+	}
+}
+
+func ApplyStrictFirewall(port string, backupPath string, bc *bufioConn) error {
+    if err := backupFirewall(backupPath); err != nil {
+        return fmt.Errorf("backup failed: %w", err)
+    }
+
+    fw := detectFirewall()
+    switch fw {
+    case UFW:
+        exec.Command("ufw", "--force", "reset").Run()
+        exec.Command("ufw", "default", "deny", "incoming").Run()
+        exec.Command("ufw", "default", "deny", "outgoing").Run()
+        exec.Command("ufw", "allow", port+"/tcp").Run()
+        if err := exec.Command("ufw", "--force", "enable").Run(); err != nil {
+            return err
+        }
+		
+
+    case Firewalld:
+        exec.Command("firewall-cmd", "--set-default-zone=drop").Run()
+        if err := exec.Command("firewall-cmd", "--zone=drop", "--add-port="+port+"/tcp", "--permanent").Run(); err != nil {
+            return err
+        }
+        if err := exec.Command("firewall-cmd", "--reload").Run(); err != nil {
+            return err
+        }
+		
+
+    case Iptables:
+        exec.Command("iptables", "-F").Run()
+        exec.Command("iptables", "-P", "INPUT", "DROP").Run()
+        exec.Command("iptables", "-P", "OUTPUT", "DROP").Run()
+        exec.Command("iptables", "-A", "INPUT", "-p", "tcp", "--dport", port, "-j", "ACCEPT").Run()
+        exec.Command("iptables", "-A", "OUTPUT", "-p", "tcp", "--sport", port, "-j", "ACCEPT").Run()
+        // Allow loopback so system services don't break
+        exec.Command("iptables", "-A", "INPUT", "-i", "lo", "-j", "ACCEPT").Run()
+        exec.Command("iptables", "-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT").Run()
+		
+
+    case Nftables:
+        // Flush all existing rules, then apply a minimal allow-only ruleset
+        exec.Command("nft", "flush", "ruleset").Run()
+        nftScript := fmt.Sprintf(`
+table inet filter {
+    chain input {
+        type filter hook input priority 0; policy drop;
+        iif "lo" accept
+        tcp dport %s accept
+    }
+    chain output {
+        type filter hook output priority 0; policy drop;
+        oif "lo" accept
+        tcp sport %s accept
+    }
+    chain forward {
+        type filter hook forward priority 0; policy drop;
+    }
+}
+`, port, port)
+        cmd := exec.Command("nft", "-f", "-")
+        cmd.Stdin = strings.NewReader(nftScript)
+        if err := cmd.Run(); err != nil {
+            return fmt.Errorf("nftables apply failed: %w", err)
+        }
+		
+	case Unknown:
+		return fmt.Errorf("no supported firewall detected")
+    }
+
+	for _, svc := range []string{"ssh", "sshd", "teleport"} {
+		disableService(svc, bc)
+	}
+
+	if err := flushConntrack(); err != nil {
+		wmsg := fmt.Sprintf("WARN: %v", err)
+		logEvent(wmsg)
+		bc.Conn.Write([]byte(wmsg + "\n"))
+		// Non-fatal: rules are applied, just existing sessions may linger
+	}
+
+	return nil;
+}
+
+func flushConntrack() error {
+    // conntrack -F flushes all entries from the connection tracking table
+    // After this, no existing session is "remembered" as ESTABLISHED
+    if path, err := exec.LookPath("conntrack"); err == nil {
+        _ = path
+        if err := exec.Command("conntrack", "-F").Run(); err != nil {
+            return fmt.Errorf("conntrack flush failed: %w", err)
+        }
+        logEvent("LOCKDOWN: conntrack table flushed — all existing sessions invalidated")
+        return nil
+    }
+    // Fallback: write 1 to nf_conntrack_max forces a flush on some kernels,
+    // but the real fallback is doing it via /proc
+    logEvent("WARN: conntrack binary not found — existing sessions may persist through firewalld")
+    return fmt.Errorf("conntrack tool not available; run sudo dnf install conntrack-tools or sudo apt install conntrack -y or sudo zypper install conntrack-tools")
+}
+
+func RestoreFirewall(backupPath string) error {
+    data, err := os.ReadFile(backupPath)
+    if err != nil {
+        return fmt.Errorf("cannot read backup: %w", err)
+    }
+
+    lines := strings.SplitN(string(data), "\n", 2)
+    if len(lines) < 2 {
+        return fmt.Errorf("backup malformed")
+    }
+    fwType := strings.TrimSpace(lines[0])
+    rules := lines[1]
+
+    switch fwType {
+    case "ufw", "iptables":
+        cmd := exec.Command("iptables-restore")
+        cmd.Stdin = strings.NewReader(rules)
+        return cmd.Run()
+    case "nftables":
+        // nft list ruleset output is directly restorable via nft -f
+        exec.Command("nft", "flush", "ruleset").Run()
+        cmd := exec.Command("nft", "-f", "-")
+        cmd.Stdin = strings.NewReader(rules)
+        return cmd.Run()
+    case "firewalld":
+        exec.Command("firewall-cmd", "--set-default-zone=public").Run()
+        return exec.Command("firewall-cmd", "--reload").Run()
+    }
+    return fmt.Errorf("unknown backup type: %s", fwType)
 }
 
 func detectFirewall() FirewallType {
-	if isServiceActive("ufw") {
-		return UFW
-	}
-	if isServiceActive("firewalld") {
-		return Firewalld
-	}
-	if _, err := exec.LookPath("iptables"); err == nil {
-		return Iptables
-	}
-	return Unknown
+    if exec.Command("systemctl", "is-active", "--quiet", "ufw").Run() == nil {
+        return UFW
+    }
+    if exec.Command("systemctl", "is-active", "--quiet", "firewalld").Run() == nil {
+        return Firewalld
+    }
+    // Check nftables BEFORE iptables — on modern kernels nft may shadow ipt
+    if exec.Command("systemctl", "is-active", "--quiet", "nftables").Run() == nil {
+        return Nftables
+    }
+    if _, err := exec.LookPath("iptables"); err == nil {
+        return Iptables
+    }
+    return Unknown
 }
 
-func isServiceActive(service string) bool {
-	cmd := exec.Command("systemctl", "is-active", "--quiet", service)
-	return cmd.Run() == nil
+func backupFirewall(backupPath string) error {
+    fw := detectFirewall()
+    var out []byte
+    var err error
+    var prefix string
+
+    switch fw {
+    case UFW, Iptables:
+        out, err = exec.Command("iptables-save").Output()
+        prefix = string(fw) + "\n"
+    case Nftables:
+        out, err = exec.Command("nft", "list", "ruleset").Output()
+        prefix = "nftables\n"
+    case Firewalld:
+        out, err = exec.Command("firewall-cmd", "--list-all").Output()
+        prefix = "firewalld\n"
+    default:
+        return fmt.Errorf("cannot backup: unknown firewall")
+    }
+
+    if err != nil {
+        return err
+    }
+
+    dir := filepath.Dir(backupPath)
+    if err := os.MkdirAll(dir, 0700); err != nil {
+        return err
+    }
+
+    f, err := os.OpenFile(backupPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+    if err != nil {
+        return err
+    }
+    defer f.Close()
+
+    _, err = f.Write(append([]byte(prefix), out...))
+    return err
 }
 
-func setupUFW(port string, backupPath string) error {
-	// Backup: Redirect status output to file
-	backupCmd := fmt.Sprintf("ufw status numbered > %s", backupPath)
-	if err := exec.Command("sh", "-c", backupCmd).Run(); err != nil {
-		return fmt.Errorf("backup failed: %v", err)
+// disableService stops a systemd service immediately, disables it from starting on boot,
+// and kills all processes belonging to it so no active connections linger.
+func disableService(name string, bc *bufioConn) {
+	// Check if the unit is known to systemd at all
+	if err := exec.Command("systemctl", "cat", name).Run(); err != nil {
+		// Unit does not exist — skip silently
+		return
 	}
 
-	// Chain commands
-	cmds := [][]string{
-		{"--force", "reset"},
-		{"default", "deny", "incoming"},
-		{"default", "deny", "outgoing"},
-		{"allow", "in", port + "/tcp"},
-		{"allow", "out", port + "/tcp"},
-		{"allow", "in", "on", "lo"},
-		{"allow", "out", "on", "lo"},
-		{"--force", "enable"},
+	// Kill all processes in the service cgroup first (sends SIGKILL to every PID)
+	if err := exec.Command("systemctl", "kill", "--kill-who=all", "--signal=SIGKILL", name).Run(); err != nil {
+		msg := fmt.Sprintf("WARN: kill %s failed: %v", name, err)
+		logEvent(msg)
+		bc.Conn.Write([]byte(msg + "\n"))
 	}
 
-	for _, args := range cmds {
-		if err := exec.Command("ufw", args...).Run(); err != nil {
-			return fmt.Errorf("ufw %v failed: %v", args, err)
-		}
+	// Stop the unit (removes it from active state)
+	if err := exec.Command("systemctl", "stop", name).Run(); err != nil {
+		msg := fmt.Sprintf("WARN: stop %s failed: %v", name, err)
+		logEvent(msg)
+		bc.Conn.Write([]byte(msg + "\n"))
 	}
-	return nil
+
+	// Disable so it won't restart on reboot
+	if err := exec.Command("systemctl", "disable", name).Run(); err != nil {
+		msg := fmt.Sprintf("WARN: disable %s failed: %v", name, err)
+		logEvent(msg)
+		bc.Conn.Write([]byte(msg + "\n"))
+	}
+
+	logEvent(fmt.Sprintf("LOCKDOWN: %s killed, stopped, and disabled", name))
+	bc.Conn.Write([]byte(fmt.Sprintf("[+] %s killed, stopped, and disabled.\n", name)))
 }
 
-func setupFirewalld(port string, backupPath string) error {
-	// Backup: copy the config dir
-	if err := exec.Command("cp", "-r", "/etc/firewalld", backupPath).Run(); err != nil {
-		return fmt.Errorf("backup failed: %v", err)
+// enableService re-enables and starts a systemd service that was disabled during lockdown.
+// Skips silently if the unit does not exist on this system.
+func enableService(name string, bc *bufioConn) {
+	// Check if the unit is known to systemd at all
+	if err := exec.Command("systemctl", "cat", name).Run(); err != nil {
+		return
 	}
 
-	commands := [][]string{
-		{"--set-default-zone=drop"},
-		{"--permanent", "--zone=drop", "--add-port=" + port + "/tcp"},
-		{"--direct", "--add-rule", "ipv4", "filter", "OUTPUT", "0", "-p", "tcp", "--dport", port, "-j", "ACCEPT"},
-		{"--direct", "--add-rule", "ipv4", "filter", "OUTPUT", "1", "-j", "DROP"},
-		{"--reload"},
+	if err := exec.Command("systemctl", "enable", name).Run(); err != nil {
+		msg := fmt.Sprintf("WARN: enable %s failed: %v", name, err)
+		logEvent(msg)
+		bc.Conn.Write([]byte(msg + "\n"))
 	}
 
-	for _, args := range commands {
-		if err := exec.Command("firewall-cmd", args...).Run(); err != nil {
-			return fmt.Errorf("firewall-cmd %v failed: %v", args, err)
-		}
+	if err := exec.Command("systemctl", "start", name).Run(); err != nil {
+		msg := fmt.Sprintf("WARN: start %s failed: %v", name, err)
+		logEvent(msg)
+		bc.Conn.Write([]byte(msg + "\n"))
 	}
-	return nil
+
+	logEvent(fmt.Sprintf("UNLOCK: %s enabled and started", name))
+	bc.Conn.Write([]byte(fmt.Sprintf("[+] %s enabled and started.\n", name)))
 }
-
-func setupIptables(port string, backupPath string) error {
-	// Backup using iptables-save
-	backupCmd := fmt.Sprintf("iptables-save > %s", backupPath)
-	if err := exec.Command("sh", "-c", backupCmd).Run(); err != nil {
-		return fmt.Errorf("backup failed: %v", err)
-	}
-
-	cmds := [][]string{
-		{"-F"},
-		{"-A", "INPUT", "-i", "lo", "-j", "ACCEPT"},
-		{"-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT"},
-		{"-A", "INPUT", "-p", "tcp", "--dport", port, "-j", "ACCEPT"},
-		{"-A", "OUTPUT", "-p", "tcp", "--sport", port, "-j", "ACCEPT"},
-		{"-P", "INPUT", "DROP"},
-		{"-P", "FORWARD", "DROP"},
-		{"-P", "OUTPUT", "DROP"},
-	}
-
-	for _, args := range cmds {
-		if err := exec.Command("iptables", args...).Run(); err != nil {
-			return fmt.Errorf("iptables %v failed: %v", args, err)
-		}
-	}
-	return nil
-}
-
-// --- CRYPTO UTILITIES ---
 
 func authenticate(conn net.Conn) bool {
 	challenge := make([]byte, 32)
 	rand.Read(challenge)
 	conn.Write([]byte(hex.EncodeToString(challenge) + "\n"))
-
+	
 	reader := bufio.NewReader(conn)
 	sigHex, err := reader.ReadString('\n')
-	if err != nil {
-		return false
+	if err != nil { 
+		logEvent(fmt.Sprintf("AUTH ERROR: Failed to read signature: %v", err))
+		return false 
 	}
+	
 	signature, err := hex.DecodeString(strings.TrimSpace(sigHex))
-	if err != nil {
-		return false
+	if err != nil { 
+		logEvent(fmt.Sprintf("AUTH ERROR: Invalid hex signature: %v", err))
+		return false 
 	}
+	
 	return verifySignature(challenge, signature)
 }
 
 func verifySignature(message, signature []byte) bool {
 	pub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(encodedPubKey))
-	if err != nil {
-		return false
+	if err != nil { 
+		logEvent(fmt.Sprintf("AUTH ERROR: Could not parse encodedPubKey: %v", err))
+		return false 
 	}
 	cryptoPub, ok := pub.(ssh.CryptoPublicKey)
-	if !ok {
-		return false
-	}
+	if !ok { return false }
 	rsaPub, ok := cryptoPub.CryptoPublicKey().(*rsa.PublicKey)
-	if !ok {
+	if !ok { return false }
+	hash := sha256.Sum256(message)
+	err = rsa.VerifyPKCS1v15(rsaPub, crypto.SHA256, hash[:], signature)
+	if err != nil {
+		logEvent(fmt.Sprintf("AUTH ERROR: Signature verification failed: %v", err))
 		return false
 	}
-	hash := sha256.Sum256(message)
-	return rsa.VerifyPKCS1v15(rsaPub, crypto.SHA256, hash[:], signature) == nil
+	return true
 }
 
 func generateInMemCert() (tls.Certificate, error) {
 	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{Organization: []string{"Internal"}},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(time.Hour * 24),
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{Organization: []string{"Internal"}},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(time.Hour * 24),
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
 	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
+	if err != nil { return tls.Certificate{}, err }
 	return tls.Certificate{Certificate: [][]byte{derBytes}, PrivateKey: priv}, nil
+}
+
+func binary32(b []byte) uint32 {
+	if len(b) < 4 { return 0 }
+	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+}
+
+func generateSSHHostKey() (ssh.Signer, error) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil { return nil, err }
+	return ssh.NewSignerFromKey(key)
 }
 
 func HasRootAccess() bool {

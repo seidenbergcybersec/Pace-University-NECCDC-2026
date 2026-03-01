@@ -1,74 +1,33 @@
-# Run on a specific set of hosts by providing the argument --extra-vars "target=..."
 - name: Transfer and execute a binary or script.
   hosts: "{{ target | default('my_servers') }}"
   become: "{{ root | default(false) | bool }}"
-  gather_facts: false
+  gather_facts: false  # Facts remain disabled
   vars_files:
     - ../vars/settings.yml
+  vars:
+    # Generate a timestamp once at the start of the play for the whole run
+    run_timestamp: "{{ now(fmt='%Y-%m-%d %H:%M:%S') }}"
 
   pre_tasks:
-    # --- HELP FEATURE ---
-    # Trigger this with: ansible-playbook playbook.yml -e help=true
-    - name: Display Help Information
-      run_once: true
-      delegate_to: localhost
-      become: false
-      when: help | default(false) | bool
-      block:
-        - name: Show Help Message
-          ansible.builtin.debug:
-            msg:
-              - "USAGE: ansible-playbook playbook.yml -e 'target=group script=/path/to/script'"
-              - ""
-              - "REQUIRED VARIABLES:"
-              - "  script             The local path to the script or binary to execute."
-              - "  local_results_path (In settings.yml) Path where execution logs are stored locally."
-              - ""
-              - "OPTIONAL VARIABLES:"
-              - "  target             Hosts to run against (default: my_servers)."
-              - "  script_args        Arguments to pass to the script."
-              - "  root               Set to 'true' to run with sudo (default: false)."
-              - "  help               Set to 'true' to see this message."
-              - ""
-              - "WHAT THIS PLAYBOOK DOES:"
-              - "  1. Validates that the script variable is provided."
-              - "  2. Copies and executes the script on target hosts."
-              - "  3. Captures STDOUT and STDERR."
-              - "  4. Saves results to a local file per host for auditing."
-
-        - name: End play after help
-          ansible.builtin.meta: end_play
-          
-    # --- VARIABLE VALIDATION ---
     - name: Ensure required variables are set
       run_once: true
       delegate_to: localhost
-      become: false
       ansible.builtin.assert:
         that:
           - script is defined and script | length > 0
           - local_results_path is defined and local_results_path | length > 0
-        fail_msg: "CRITICAL ERROR: 'script' and 'local_results_path' must be defined. Run with '-e help=true' for usage."
+        fail_msg: "CRITICAL ERROR: 'script' and 'local_results_path' must be defined."
 
   tasks:
     - name: Run binary or script
       ansible.builtin.script: "{{ script }} {{ script_args | default('') }}"
-      when: script is defined and script | length > 0
       register: shell_output
       ignore_errors: yes
 
-    - name: Display output to screen
-      debug:
-        msg: 
-          - "STDOUT:"
-          - "{{ shell_output.stdout_lines | default('No output') }}"
-          - "STDERR:"
-          - "{{ shell_output.stderr_lines | default('No errors') }}"
-
-    # --- ADD THIS TASK ---
     - name: Ensure local results directory exists
       delegate_to: localhost
       become: no
+      # To avoid race conditions with multiple hosts creating the same parent dir:
       ansible.builtin.file:
         path: "{{ local_results_path }}/{{ inventory_hostname }}"
         state: directory
@@ -80,10 +39,11 @@
       ansible.builtin.blockinfile:
         path: "{{ local_results_path }}/{{ inventory_hostname }}/execution.log"
         create: yes
-        marker: "# --- EXECUTION {mark} ({{ ansible_date_time.iso8601 | default('N/A') }}) ---"
+        # Use the run_timestamp variable here. 
+        # Since it's unique per run, it will append a NEW block every time you run the playbook.
+        marker: "# --- EXECUTION {mark} ({{ run_timestamp }}) ---\n\n\n"
         insertafter: EOF
         block: |
-          TIMESTAMP: {{ lookup('pipe', 'date "+%Y-%m-%d %H:%M:%S"') }}
           SCRIPT_PATH: {{ script }}
           ARGS: {{ script_args | default('None') }}
           RESULT: {{ 'SUCCESS' if shell_output.rc == 0 else 'FAILED (Exit Code: ' ~ shell_output.rc ~ ')' }}
@@ -97,6 +57,5 @@
     - name: Final Log Location Summary
       run_once: true
       delegate_to: localhost
-      become: no
       debug:
-        msg: "Execution logs are saved in: {{ local_results_path }}/{{ inventory_hostname }}/execution.log"
+        msg: "Logs for this run ({{ run_timestamp }}) have been saved to subfolders in: {{ local_results_path }}/"

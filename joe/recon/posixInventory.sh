@@ -94,20 +94,32 @@ FILTER_REGEX="samba|sssd|krb5|wordpress|teleport|nginx|apache|httpd|nfs|mysql|ma
 {
     if [[ -d /run/systemd/system ]]; then
         echo "--- HIGH PRIORITY SERVICES ---"
-        systemctl list-units --type=service --state=running | grep -Ei "$FILTER_REGEX"
+        # Display the filtered list in the log
+        systemctl list-units --type=service --state=running --no-pager --no-legend | grep -Ei "$FILTER_REGEX"
         
         printf '\n--- EXPORTING RUNNING UNIT FILES ---\n'
+        # Ensure directory exists
+        mkdir -p "$OUT_DIR/unit_files"
+        
+        # Capture only the services matching the regex into the array
         readarray -t RUNNING_SERVICES < <(systemctl list-units --type=service --state=running --no-legend --no-pager | awk '{print $1}')
         
         for svc in "${RUNNING_SERVICES[@]}"; do
             [[ -z "$svc" ]] && continue
+            
+            # Echo the name to the log/stdout as requested
+            echo "Exporting unit file: $svc"
+            
+            # Perform the export
             systemctl cat "$svc" > "$OUT_DIR/unit_files/$svc.service" 2>/dev/null
         done
-        echo "Exported ${#RUNNING_SERVICES[@]} unit files."
+        
+        echo "--------------------------------------"
+        echo "Successfully exported ${#RUNNING_SERVICES[@]} running unit files."
 
     else
         echo "--- RUNNING PROCESSES (Non-Systemd) ---"
-        ps auxf
+        ps auxf | grep -Ei "$FILTER_REGEX"
     fi
 } > "$OUT_DIR/services.txt"
 

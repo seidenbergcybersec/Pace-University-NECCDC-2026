@@ -206,3 +206,8 @@ Resulting achive will be in ansible/results/target/
 
 # Wazuh
 
+Install wazuh on host by running:
+```bash
+cd host
+./wazuh.sh
+```

@@ -166,7 +166,11 @@
       copy:
         dest: /etc/ssh/sshd_config
         backup: yes
+        owner: root
+        group: root
+        mode: '0600'
         content: |
+          LogLevel VERBOSE
           PermitRootLogin no
           AllowUsers {{ admin_user }}
           PasswordAuthentication no

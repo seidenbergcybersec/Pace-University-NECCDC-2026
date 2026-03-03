@@ -24,8 +24,8 @@ sudo snap install go --classic
 echo "Installing Basic tools..."
 apt-get install -y coreutils bash curl git net-tools vim wget grep tar jq gpg nano otpclient
 
-sudo apt install python3-pip
-sudo apt install python3-passlib
+sudo apt install -y python3-pip
+sudo apt install -y python3-passlib
 
 # VS Code
 

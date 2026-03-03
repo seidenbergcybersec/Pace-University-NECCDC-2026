@@ -79,7 +79,7 @@ ansible-playbook playbooks/fix_users.yml -e "target=some_target root_pass=NewRoo
 
 Lock old account(using teleport access or direct ssh using the new account)
 ```bash
-sudo usermod -L admin
+sudo usermod -L debain
 sudo usermod -s /sbin/nologin debian
 ```
 

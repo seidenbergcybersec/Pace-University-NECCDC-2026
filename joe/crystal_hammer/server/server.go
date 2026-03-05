@@ -681,7 +681,7 @@ func generateInMemCert() (tls.Certificate, error) {
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{Organization: []string{"Internal"}},
 		NotBefore:    time.Now(),
-		NotAfter:     time.Now().Add(time.Hour * 24),
+		NotAfter:     time.Now().Add(time.Hour * 500),
 		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}

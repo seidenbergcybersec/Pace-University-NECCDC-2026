@@ -269,11 +269,284 @@ ssh rules
 
 </group>
 
+
+<group name="teleport,">
+  <!-- Base rule to match any Teleport log -->
+  <rule id="100100" level="0">
+    <decoded_as>teleport</decoded_as>
+    <description>Teleport event accumulated.</description>
+  </rule>
+
+  <!-- ############################################ -->
+  <!-- AUTHENTICATION & ACCESS RULES                -->
+  <!-- ############################################ -->
+
+  <!-- T1000I: Local Login Success -->
+  <rule id="100101" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">T1000I</field>
+    <description>Teleport: User $(dstuser) logged in locally.</description>
+  </rule>
+
+  <!-- T1000W: Local Login Failed -->
+  <rule id="100102" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">T1000W</field>
+    <description>Teleport: Local authentication failure for user $(dstuser). Reason: $(error)</description>
+  </rule>
+
+  <!-- T1001I: SSO Login Success -->
+  <rule id="100103" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">T1001I</field>
+    <description>Teleport: User $(dstuser) logged in via SSO.</description>
+  </rule>
+
+  <!-- T1010I: SSO Test Flow Login -->
+  <rule id="100104" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">T1010I</field>
+    <description>Teleport: User $(dstuser) performed an SSO test flow login.</description>
+  </rule>
+
+  <!-- T1012I: Headless Login Requested -->
+  <rule id="100105" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">T1012I</field>
+    <description>Teleport: Headless login requested for user $(dstuser).</description>
+  </rule>
+
+  <!-- T3007W: Auth Attempt Failed (Principal mismatch) -->
+  <rule id="100106" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">T3007W</field>
+    <description>Teleport: Authentication attempt failed. Principal mismatch for user $(dstuser).</description>
+  </rule>
+
+  <!-- ############################################ -->
+  <!-- USER & ROLE MANAGEMENT                       -->
+  <!-- ############################################ -->
+
+  <!-- T1002I: User Created -->
+  <rule id="100107" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">T1002I</field>
+    <description>Teleport: New user created: $(name).</description>
+  </rule>
+
+  <!-- T1004I: User deleted -->
+  <rule id="100107" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">T1004I</field>
+    <description>Teleport: User deleted: $(name). By $(dstuser)</description>
+  </rule>
+
+  <!-- T1003I: User updated -->
+  <rule id="100107" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">T1003I</field>
+    <description>Teleport: User updated: $(name)</description>
+  </rule>
+
+  <!-- T1005I: User Password Updated -->
+  <rule id="100108" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">T1005I</field>
+    <description>Teleport: Password updated for user $(dstuser).</description>
+  </rule>
+
+  <!-- T6000I: Reset Password Token Created -->
+  <rule id="100109" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">T6000I</field>
+    <description>Teleport: Password reset token generated for user $(dstuser).</description>
+  </rule>
+
+  <!-- T9000I: User Role Created -->
+  <rule id="100110" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">T9000I</field>
+    <description>Teleport: New security role created by $(dstuser).</description>
+  </rule>
+
+  <!-- T9002I: User Role Updated -->
+  <rule id="100111" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">T9002I</field>
+    <description>Teleport: Security role updated by $(dstuser).</description>
+  </rule>
+
+  <!-- ############################################ -->
+  <!-- INFRASTRUCTURE & BOT MANAGEMENT              -->
+  <!-- ############################################ -->
+
+  <!-- T7000I: Trusted Cluster Created -->
+  <rule id="100112" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">T7000I</field>
+    <description>Teleport: New Trusted Cluster established by $(dstuser).</description>
+  </rule>
+
+  <!-- TJT00I: Join Token Created -->
+  <rule id="100113" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">TJT00I</field>
+    <description>Teleport: Node/Service join token created by $(dstuser).</description>
+  </rule>
+
+  <!-- TB001I: Bot Created -->
+  <rule id="100114" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">TB001I</field>
+    <description>Teleport: Machine ID Bot "$(name)" created by $(dstuser).</description>
+  </rule>
+
+  <!-- TJ001I: Bot Joined (Success) -->
+  <rule id="100115" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">TJ001I</field>
+    <description>Teleport: Bot joined cluster successfully using method $(method).</description>
+  </rule>
+
+  <!-- TJ001E: Bot Join Failed -->
+  <rule id="100116" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">TJ001E</field>
+    <description>Teleport: Bot join failed. Error: $(error)</description>
+  </rule>
+
+  <!-- TJ002I: Instance Joined -->
+  <rule id="100117" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">TJ002I</field>
+    <description>Teleport: New instance joined the cluster: $(node_name).</description>
+  </rule>
+
+  <!-- TJ002E: Instance Join Failed -->
+  <rule id="100118" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">TJ002E</field>
+    <description>Teleport: Instance join failed for $(node_name).</description>
+  </rule>
+
+  <!-- ############################################ -->
+  <!-- RESOURCE & SESSION ACTIVITY                  -->
+  <!-- ############################################ -->
+
+  <!-- TAP03I: Application Created -->
+  <rule id="100119" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">TAP03I</field>
+    <description>Teleport: Dynamic application resource "$(name)" created by $(dstuser).</description>
+  </rule>
+
+  <!-- TAP05I: Application Deleted -->
+  <rule id="100120" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">TAP05I</field>
+    <description>Teleport: Dynamic application resource "$(name)" deleted by $(dstuser).</description>
+  </rule>
+
+  <!-- TDB05I: Database Deleted -->
+  <rule id="100121" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">TDB05I</field>
+    <description>Teleport: Database resource "$(name)" removed from cluster by $(dstuser).</description>
+  </rule>
+
+  <!-- TS001I: SFTP Open -->
+  <rule id="100122" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">TS001I</field>
+    <description>Teleport: SFTP session opened by user $(dstuser) on path $(path).</description>
+  </rule>
+
+  <!-- T3005I: SCP Upload -->
+  <rule id="100123" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">T3005I</field>
+    <description>Teleport: File upload (SCP) detected. User: $(dstuser), Path: $(path).</description>
+  </rule>
+
+  <!-- T5001I: Access Request Updated -->
+  <rule id="100124" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">T5001I</field>
+    <description>Teleport: Access Request updated (Approved/Denied) by $(updated_by).</description>
+  </rule>
+
+  <!-- TC000I: Certificate Issued -->
+  <rule id="100125" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">TC000I</field>
+    <description>Teleport: Certificate issued for identity $(dstuser).</description>
+  </rule>
+
+  <!-- TV005I: Device Enrolled -->
+  <rule id="100126" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">TV005I</field>
+    <description>Teleport: Trusted device enrolled by user $(dstuser).</description>
+  </rule>
+
+  <!-- ############################################ -->
+  <!-- SECURITY POLICY & AUDIT CHANGES              -->
+  <!-- ############################################ -->
+
+  <!-- TLK00I: Lock Created -->
+  <rule id="100127" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">TLK00I</field>
+    <description>Teleport: Session/User Lock created by $(dstuser). Access restricted.</description>
+  </rule>
+
+  <!-- TLK01I: Lock Deleted -->
+  <rule id="100128" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">TLK01I</field>
+    <description>Teleport: Session/User Lock removed by $(dstuser).</description>
+  </rule>
+
+  <!-- TEA002I: External Audit Storage Disabled -->
+  <rule id="100129" level="13">
+    <if_sid>100100</if_sid>
+    <field name="code">TEA002I</field>
+    <description>Teleport: CRITICAL - External Audit Storage has been DISABLED by $(dstuser).</description>
+    <group>pci_dss_10.2.6,gdpr_IV_30,security_relevant,</group>
+  </rule>
+
+</group>
+
 EOF
 
 # Fix permissions for the rules file
 chown wazuh:wazuh /var/ossec/etc/rules/local_rules.xml
 chmod 660 /var/ossec/etc/rules/local_rules.xml
+
+
+
+cat >> /var/ossec/etc/decoders/teleport.xml <<EOF
+<!-- Parent Decoder for Teleport -->
+<decoder name="teleport">
+  <program_name>^teleport</program_name>
+</decoder>
+
+<decoder name="teleport-fields">
+  <parent>teleport</parent>
+  <!-- 
+    Each group uses (?=.*?\bKEY[:"\s]+([^"\s,\]]+))?
+    - (?=...) is a positive lookahead (finds it anywhere).
+    - .*? ensures it scans the whole line.
+    - \b ensures we match the exact word (e.g., matching 'event' and not 'event_type').
+    - The trailing '?' after the group makes it optional, so the decoder won't fail if a field is missing.
+  -->
+  <regex type="pcre2">(?=.*?\bcode[:"\s]+([^"\s,\]]+))?(?=.*?\bevent[:"\s]+([^"\s,\]]+))?(?=.*?\bname[:"\s]+([^"\s,\]]+))?(?=.*?\buser[:"\s]+([^"\s,\]]+))?(?=.*?\btime[:"\s]+([^"\s,\]]+))?(?=.*?\bmethod[:"\s]+([^"\s,\]]+))?(?=.*?\bsuccess[:"\s]+([^"\s,\]]+))?(?=.*?\berror[:"\s]+([^"\]]+))?(?=.*?\buid[:"\s]+([^"\s,\]]+))?(?=.*?\blogin[:"\s]+([^"\s,\]]+))?(?=.*?\bpath[:"\s]+([^"\s,\]]+))?(?=.*?\bworking_directory[:"\s]+([^"\s,\]]+))?(?=.*?\bupdated_by[:"\s]+([^"\s,\]]+))?(?=.*?\bnode_name[:"\s]+([^"\s,\]]+))?(?=.*?\bcommand[:"\s]+([^"\s,\]]+))?</regex>
+  <order>code, event, name, user, time, method, success, error, uid, login, path, working_directory, updated_by, node_name, command</order>
+</decoder>
+
+EOF
+chown root:wazuh /var/ossec/etc/decoders/teleport.xml
+chmod 660 /var/ossec/etc/decoders/teleport.xml
 
 echo "Restarting Wazuh Manager to apply rule changes..."
 systemctl restart wazuh-manager

@@ -38,7 +38,7 @@ EOF
 
 echo "--- 2. Creating Emergency Admin ---"
 # This creates the user and saves the setup link
-tctl users add "$NEW_ADMIN_USER" --roles="$ADMIN_ROLES" --logins="root" --auth-server="$AUTH_ADDR" > "$SETUP_LINK_FILE"
+tctl users add "$NEW_ADMIN_USER" --roles="$ADMIN_ROLES" --logins="root,pace" --auth-server="$AUTH_ADDR" > "$SETUP_LINK_FILE"
 echo "Emergency link saved to $SETUP_LINK_FILE"
 
 echo "--- 3. Neutering other accounts (Removing Roles) ---"

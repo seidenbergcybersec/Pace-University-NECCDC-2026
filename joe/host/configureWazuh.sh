@@ -517,6 +517,24 @@ ssh rules
 
 </group>
 
+<group name="neccdc_fim,">
+  <rule id="100200" level="13">
+    <if_sid>550, 554, 553</if_sid>
+    <match>/.ssh/</match>
+    <description>SSH Key modified/added in \$(file)!</description>
+  </rule>
+  <rule id="100201" level="13">
+    <if_sid>550, 554, 553</if_sid>
+    <match>/etc/teleport.yaml|/etc/ssh/sshd_config</match>
+    <description>Critical Security Config \$(file) modified!</description>
+  </rule>
+  <rule id="100202" level="13">
+    <if_sid>550, 554, 553</if_sid>
+    <match>/var/www</match>
+    <description>Website folder change: \$(file)!</description>
+  </rule>
+</group>
+
 EOF
 
 # Fix permissions for the rules file
@@ -547,6 +565,34 @@ cat >> /var/ossec/etc/decoders/teleport.xml <<EOF
 EOF
 chown root:wazuh /var/ossec/etc/decoders/teleport.xml
 chmod 660 /var/ossec/etc/decoders/teleport.xml
+
+
+
+# Create the configuration
+cat <<EOF > "/var/ossec/etc/shared/default/agent.conf"
+<agent_config>
+  <syscheck>
+    <frequency>60</frequency>
+    
+    <!-- 1. SSH Keys -->
+    <directories check_all="yes" report_changes="yes" realtime="yes" whodata="yes">/home/*/.ssh</directories>
+    <directories check_all="yes" report_changes="yes" realtime="yes" whodata="yes">/root/.ssh</directories>
+
+    <!-- 2. Critical Configs -->
+    <directories check_all="yes" report_changes="yes" realtime="yes" whodata="yes">/etc/ssh/sshd_config</directories>
+    <directories check_all="yes" report_changes="yes" realtime="yes" whodata="yes">/etc/teleport.yaml</directories>
+
+    <!-- 3. Web Directory & Configs -->
+    <directories check_all="yes" report_changes="yes" realtime="yes" whodata="yes">/var/www</directories>
+    <directories check_all="yes" report_changes="yes" realtime="yes" whodata="yes">/etc/nginx</directories>
+    <directories check_all="yes" report_changes="yes" realtime="yes" whodata="yes">/etc/apache2</directories>
+  </syscheck>
+</agent_config>
+EOF
+
+# Ensure correct permissions
+chown wazuh:wazuh "/var/ossec/etc/shared/default/agent.conf"
+chmod 660 "/var/ossec/etc/shared/default/agent.conf"
 
 echo "Restarting Wazuh Manager to apply rule changes..."
 systemctl restart wazuh-manager

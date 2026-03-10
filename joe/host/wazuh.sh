@@ -65,16 +65,22 @@ EOF
 echo "Generating security certificates and cluster keys..."
 bash wazuh-install.sh --generate-config-files
 
+
+
+echo "--         Wazuh Indexer         --"
 # 6. Installation Phase
 echo "Starting Wazuh Indexer installation..."
 bash wazuh-install.sh --wazuh-indexer node-1
 
+echo "--         Wazuh Idexer initialization         --"
 echo "Initializing Indexer Cluster (this may take a minute)..."
 bash wazuh-install.sh --start-cluster
 
+echo "--         Wazuh Server         --"
 echo "Starting Wazuh Server installation..."
 bash wazuh-install.sh --wazuh-server wazuh-1
 
+echo "--         Wazuh Dashboard         --"
 echo "Starting Wazuh Dashboard installation..."
 bash wazuh-install.sh --wazuh-dashboard dashboard
 

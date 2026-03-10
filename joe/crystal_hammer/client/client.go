@@ -121,12 +121,41 @@ func asyncReader(bc *bufioConn, stopReader <-chan struct{}, readerDone chan stru
 }
 
 func main() {
-	addrPtr := flag.String("addr", "", "Server address")
-	portPtr := flag.String("port", "9090", "Server port")
-	keyPath := flag.String("key", "id_rsa", "Path to private key")
+	var addr string
+	var port string
+	var keyPath string
+
+	// 1. Bind both long and short flags to the same variables
+	flag.StringVar(&addr, "addr", "", "Server address")
+	flag.StringVar(&addr, "a", "", "Server address (shorthand)")
+	
+	flag.StringVar(&port, "port", "6769", "Server port")
+	flag.StringVar(&port, "p", "6769", "Server port (shorthand)")
+	
+	flag.StringVar(&keyPath, "key", "id_rsa", "Path to private key")
+	
 	flag.Parse()
 
-	conn, err := tls.Dial("tcp", net.JoinHostPort(*addrPtr, *portPtr), &tls.Config{InsecureSkipVerify: true})
+	// 2. Handle positional arguments (e.g., ./client 1.2.3.4 8080)
+	// flag.Args() contains everything that didn't start with a hyphen
+	posArgs := flag.Args()
+	if len(posArgs) > 0 && addr == "" {
+		// If -a or -addr wasn't used, take the first positional arg as the address
+		addr = posArgs[0]
+	}
+	if len(posArgs) > 1 {
+		// If a second positional arg exists, treat it as the port
+		port = posArgs[1]
+	}
+
+	// 3. Validation
+	if addr == "" {
+		fmt.Println("Usage: client [addr] [port] or use -a <addr> -p <port>")
+		os.Exit(1)
+	}
+
+	// Now use 'addr' and 'port' variables directly
+	conn, err := tls.Dial("tcp", net.JoinHostPort(addr, port), &tls.Config{InsecureSkipVerify: true})
 	if err != nil {
 		fmt.Printf("Connect error: %v\n", err)
 		os.Exit(1)
@@ -138,7 +167,7 @@ func main() {
 	// --- Auth ---
 	challengeHex, _ := bc.r.ReadString('\n')
 	challenge, _ := hex.DecodeString(strings.TrimSpace(challengeHex))
-	privKey, err := loadRSAPrivateKey(*keyPath)
+	privKey, err := loadRSAPrivateKey(keyPath)
 	if err != nil {
 		fmt.Printf("Key error: %v\n", err)
 		os.Exit(1)

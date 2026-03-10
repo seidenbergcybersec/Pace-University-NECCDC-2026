@@ -7,7 +7,7 @@ cat <<EOF >> /etc/falco/falco_rules.local.yaml
   condition: >
     evt.type=bind and fd.port != 0 and 
     not proc.name in (alloy, falco, teleport, sshd)
-  output: "New port listening (user=%user.name command=%proc.cmdline port=%fd.port)"
+  output: "New port listening (user=%user.name command=%proc.cmdline port=%fd.lport)"
   priority: CRITICAL
 
 - rule: Native SSH Login

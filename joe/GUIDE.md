@@ -62,7 +62,7 @@ When the inventory.ini is populated with teleport nodes' names(or ips), run thes
 Generate a secure password:
 ```bash
 cd /passwordGen
-./gen.sh
+./gen.sh "Linux pace login"
 ```
 
 Generate an ssh keypair:
@@ -74,12 +74,12 @@ cd ansible/ssh
 Run the user hardening script:
 ```bash
 cd ansible/
-ansible-playbook playbooks/fix_users.yml -e "target=some_target root_pass=NewRoot123 admin_pass=NewAdmin123 pubkey='$(cat ssh/id_rsa.pub)'"
+ansible-playbook playbooks/fix_users.yml -e "target=some_target root_pass=IBegYouToChangeMe322 admin_pass=IBegYouToChangeMe228 pubkey='$(cat ssh/id_rsa.pub)'"
 ```
 
-Lock old account(using teleport access or direct ssh using the new account)
+Lock old account(using teleport access or direct ssh using the new account). Only do that if you ran the ansible playbook not under root user.
 ```bash
-sudo usermod -L debain
+sudo usermod -L debian
 sudo usermod -s /sbin/nologin debian
 ```
 
@@ -210,4 +210,15 @@ Install wazuh on host by running:
 ```bash
 cd host
 ./wazuh.sh
+```
+
+
+
+
+# Misc
+
+Ssh command:
+```bash
+cd ansible/
+ssh -i ssh/id_rsa pace@ip_addr
 ```

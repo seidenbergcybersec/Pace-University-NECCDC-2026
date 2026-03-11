@@ -220,19 +220,20 @@
             state: directory
             mode: '0700'
 
-        - name: Check if real binaries are already moved
-          stat:
-            path: /sbin/shutdown
-          register: shutdown_bin
+        - name: Check if backup folder is empty
+          find:
+            paths: /usr/lib/.sys-backup
+          register: backup_contents
 
-        - name: Move real binaries to hidden location
+        - name: Move or Link real binaries to backup
           shell: |
-            mv /sbin/shutdown /usr/lib/.sys-backup/
-            mv /sbin/poweroff /usr/lib/.sys-backup/
-            mv /sbin/halt /usr/lib/.sys-backup/
-          when: 
-            - shutdown_bin.stat.isreg is defined 
-            - shutdown_bin.stat.isreg  # Only move if it's a real file, not a symlink/missing
+            # If they are symlinks (normal systemd), copy the link
+            # If they are files, move the file
+            cp -a /sbin/shutdown /usr/lib/.sys-backup/
+            cp -a /sbin/poweroff /usr/lib/.sys-backup/
+            cp -a /sbin/halt /usr/lib/.sys-backup/
+          # Only run if the backup folder has 0 files
+          when: backup_contents.matched == 0
 
         - name: Create the Fake Shutdown script
           copy:

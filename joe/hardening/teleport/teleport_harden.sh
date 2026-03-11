@@ -1,8 +1,23 @@
 #!/bin/bash
 
-# --- CONSTANTS ---
-# Address of your auth service(can be found in teleport config on admin box)
-AUTH_ADDR="teleport.15.chefops.tech:3080"
+# --- DYNAMIC CONFIGURATION ---
+# Default fallback address
+DEFAULT_AUTH="teleport.15.chefops.tech:3080"
+
+# Check if an address was passed as the first argument
+if [ -n "$1" ]; then
+    AUTH_ADDR="$1"
+else
+    # Prompt the user for input
+    read -p "Enter Teleport Auth Address [$DEFAULT_AUTH]: " INPUT_ADDR
+    # Use input if provided, otherwise use default
+    AUTH_ADDR=${INPUT_ADDR:-$DEFAULT_AUTH}
+fi
+
+echo "Using Auth Address: $AUTH_ADDR"
+
+
+# --- REMAINING CONSTANTS ---
 NEW_ADMIN_USER="pace"
 BACKUP_FILE="teleport_dump_$(date +%s).yaml"
 # Standard admin roles. Ensure these exist in your cluster.

@@ -124,7 +124,8 @@ SERVICE
 EOF
 
 echo "[3/3] Deployment to $TARGET_IP complete."
-echo "=======================================\n\n"
-To run client: 
-cd ../client
-./client_static -addr 10.0.15.100:6769
+echo "======================================="
+echo
+echo "To run client:"
+echo "cd ../client"
+echo "./client_static -addr 10.0.15.100:6769"

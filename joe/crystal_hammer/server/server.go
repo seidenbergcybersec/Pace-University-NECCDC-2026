@@ -97,6 +97,7 @@ func init() {
 	CommandRegistry["shellraw"] = handleShellRaw
 	CommandRegistry["shell"] = handleShell
 	CommandRegistry["conntrackinstall"] = handleConntrackInstall
+	CommandRegistry["restore"] = handleRestore
 }
 
 func main() {
@@ -499,6 +500,24 @@ func handleConntrackInstall(bc *bufioConn, args []string) {
 	bc.Conn.Write([]byte("[+] conntrack installed successfully.\n"))
 }
 
+func handleRestore(bc *bufioConn, args []string) {
+    err := RestoreFromBackup("/var/backups/firewall_rules.bak")
+    if err != nil {
+        errMsg := fmt.Sprintf("ERROR: Firewall restore from backup failed: %v", err)
+        logEvent(errMsg)
+        bc.Conn.Write([]byte(errMsg + "\n"))
+    } else {
+        logEvent("SUCCESS: Firewall restored from backup.")
+        bc.Conn.Write([]byte("[+] Firewall restored from backup.\n"))
+    }
+
+    for _, svc := range []string{"ssh", "sshd", "teleport"} {
+        enableService(svc, bc)
+    }
+}
+
+
+
 // ip6tablesAvailable returns true if the ip6tables binary is present on this host.
 func ip6tablesAvailable() bool {
 	_, err := exec.LookPath("ip6tables")
@@ -538,24 +557,31 @@ func ApplyStrictFirewall(port string, backupPath string, bc *bufioConn) error {
 		}
 
 	case Firewalld:
-		// firewalld is dual-stack by default; applying rules to the drop zone
-		// covers both IPv4 and IPv6 without extra steps.
 		exec.Command("firewall-cmd", "--set-default-zone=drop").Run()
 
-		zones, _ := exec.Command("firewall-cmd", "--get-active-zones").Output()
-		for _, line := range strings.Split(string(zones), "\n") {
-			fields := strings.Fields(line)
-			if len(fields) > 1 {
-				zone := fields[0]
-				for _, iface := range fields[1:] {
-					exec.Command("firewall-cmd", "--zone="+zone, "--remove-interface="+iface, "--permanent").Run()
-					exec.Command("firewall-cmd", "--zone=drop", "--add-interface="+iface, "--permanent").Run()
-				}
+		// Get all zones and remove the mgmt port from each (prevent bleed-through)
+		zonesOut, _ := exec.Command("firewall-cmd", "--get-active-zones").Output()
+		for _, line := range strings.Split(string(zonesOut), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, " ") || strings.Contains(line, "interfaces") {
+				continue
+			}
+			zone := line
+			exec.Command("firewall-cmd", "--zone="+zone, "--remove-port="+port+"/tcp", "--permanent").Run()
+		}
+
+		// Move all non-loopback interfaces into drop using --change-interface
+		ifaces, _ := net.Interfaces()
+		for _, iface := range ifaces {
+			if iface.Flags&net.FlagLoopback == 0 {
+				exec.Command("firewall-cmd", "--zone=drop",
+					"--change-interface="+iface.Name, "--permanent").Run()
 			}
 		}
-		if err := exec.Command("firewall-cmd", "--zone=drop", "--add-port="+port+"/tcp", "--permanent").Run(); err != nil {
-			return err
-		}
+
+		// Add mgmt port only to drop
+		exec.Command("firewall-cmd", "--zone=drop", "--add-port="+port+"/tcp", "--permanent").Run()
+
 		if err := exec.Command("firewall-cmd", "--reload").Run(); err != nil {
 			return err
 		}
@@ -608,17 +634,21 @@ table inet filter {
 		return fmt.Errorf("no supported firewall detected")
 	}
 
-	for _, svc := range []string{"ssh", "sshd", "teleport"} {
-		disableService(svc, bc)
-	}
-
 	if err := flushConntrack(); err != nil {
-		wmsg := fmt.Sprintf("WARN: %v", err)
-		logEvent(wmsg)
-		bc.Conn.Write([]byte(wmsg + "\n"))
-	}
+        wmsg := fmt.Sprintf("WARN: %v", err)
+        logEvent(wmsg)
+        bc.Conn.Write([]byte(wmsg + "\n"))
+    }
 
-	return nil
+    // 2. Kill existing SSH connections (fix: sport not dst)
+    exec.Command("ss", "-K", "sport", "=", ":22").Run()
+
+    // 3. Now stop/disable the services
+    for _, svc := range []string{"ssh", "sshd", "teleport"} {
+        disableService(svc, bc)
+    }
+
+    return nil
 }
 
 // ensureUFWIPv6 sets IPV6=yes in /etc/default/ufw so that UFW manages ip6tables
@@ -695,8 +725,14 @@ func RestoreFirewall(backupPath string) error {
 		}
 
 	case Firewalld:
-		// Restore to trusted zone (dual-stack — covers IPv4 and IPv6).
 		exec.Command("firewall-cmd", "--set-default-zone=trusted").Run()
+		ifaces, _ := net.Interfaces()
+		for _, iface := range ifaces {
+			if iface.Flags&net.FlagLoopback == 0 {
+				exec.Command("firewall-cmd", "--zone=trusted",
+					"--change-interface="+iface.Name, "--permanent").Run()
+			}
+		}
 		exec.Command("firewall-cmd", "--reload").Run()
 
 	case Iptables:
@@ -724,6 +760,65 @@ func RestoreFirewall(backupPath string) error {
 		return fmt.Errorf("no supported firewall detected for unlock")
 	}
 	return nil
+}
+
+func RestoreFromBackup(backupPath string) error {
+    // --- firewalld: backup is a directory ---
+    fwdBackup := filepath.Join(backupPath, "firewalld")
+    if info, err := os.Stat(fwdBackup); err == nil && info.IsDir() {
+        if err := copyDir(fwdBackup, "/etc/firewalld"); err != nil {
+            return fmt.Errorf("firewalld config restore failed: %w", err)
+        }
+        if err := exec.Command("firewall-cmd", "--reload").Run(); err != nil {
+            return fmt.Errorf("firewalld reload failed: %w", err)
+        }
+        logEvent("RESTORE: firewalld config restored from backup directory")
+        return nil
+    }
+
+    // --- flat file: iptables-save or nft dump ---
+    data, err := os.ReadFile(backupPath)
+    if err != nil {
+        return fmt.Errorf("cannot read backup file %s: %w", backupPath, err)
+    }
+
+    lines := strings.SplitN(string(data), "\n", 2)
+    if len(lines) < 2 {
+        return fmt.Errorf("backup file malformed: missing type header")
+    }
+
+    kind := strings.TrimSpace(lines[0])
+    payload := lines[1]
+
+    switch kind {
+    case "ufw", "iptables":
+        cmd := exec.Command("iptables-restore")
+        cmd.Stdin = strings.NewReader(payload)
+        if err := cmd.Run(); err != nil {
+            return fmt.Errorf("iptables-restore failed: %w", err)
+        }
+        if ip6tablesAvailable() {
+            cmd6 := exec.Command("ip6tables-restore")
+            cmd6.Stdin = strings.NewReader(payload)
+            if err := cmd6.Run(); err != nil {
+                logEvent(fmt.Sprintf("WARN: ip6tables-restore failed: %v", err))
+            }
+        }
+        logEvent("RESTORE: iptables rules restored from backup")
+
+    case "nftables":
+        cmd := exec.Command("nft", "-f", "-")
+        cmd.Stdin = strings.NewReader(payload)
+        if err := cmd.Run(); err != nil {
+            return fmt.Errorf("nft restore failed: %w", err)
+        }
+        logEvent("RESTORE: nftables ruleset restored from backup")
+
+    default:
+        return fmt.Errorf("unrecognised backup type header: %q", kind)
+    }
+
+    return nil
 }
 
 func detectFirewall() FirewallType {

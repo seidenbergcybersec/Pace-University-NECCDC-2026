@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -125,6 +126,13 @@ func main() {
 	var port string
 	var keyPath string
 
+	// Determine default key path relative to the executable, not cwd
+	execPath, err := os.Executable()
+	if err != nil {
+		execPath = os.Args[0]
+	}
+	defaultKeyPath := filepath.Join(filepath.Dir(execPath), "id_rsa")
+
 	// 1. Bind both long and short flags to the same variables
 	flag.StringVar(&addr, "addr", "", "Server address")
 	flag.StringVar(&addr, "a", "", "Server address (shorthand)")
@@ -132,7 +140,7 @@ func main() {
 	flag.StringVar(&port, "port", "6769", "Server port")
 	flag.StringVar(&port, "p", "6769", "Server port (shorthand)")
 	
-	flag.StringVar(&keyPath, "key", "id_rsa", "Path to private key")
+	flag.StringVar(&keyPath, "key", defaultKeyPath, "Path to private key")
 	
 	flag.Parse()
 
@@ -176,8 +184,6 @@ func main() {
 	sig, _ := rsa.SignPKCS1v15(rand.Reader, privKey, crypto.SHA256, hash[:])
 	bc.Conn.Write([]byte(hex.EncodeToString(sig) + "\n"))
 
-	// --- Start async reader ---
-	
 	// --- Start async reader ---
 	stopReader := make(chan struct{})
 	readerDone := make(chan struct{})

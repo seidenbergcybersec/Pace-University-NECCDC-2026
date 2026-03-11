@@ -127,5 +127,5 @@ echo "[3/3] Deployment to $TARGET_IP complete."
 echo "======================================="
 echo
 echo "To run client:"
-echo "cd ../client"
-echo "./client_static -addr 10.0.15.100:6769"
+echo "cd client"
+echo "./client_static -addr $TARGET_IP 6769"

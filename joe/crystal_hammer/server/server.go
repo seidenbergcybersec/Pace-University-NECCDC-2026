@@ -557,34 +557,39 @@ func ApplyStrictFirewall(port string, backupPath string, bc *bufioConn) error {
 		}
 
 	case Firewalld:
-		exec.Command("firewall-cmd", "--set-default-zone=drop").Run()
+		// Strategy: don't touch zones or interfaces at all.
+		// Use firewalld's direct rules to insert DROP-everything chains
+		// at the raw iptables level, with only our port excepted.
+		// These sit BEFORE firewalld's own chains and are trivially removable.
 
-		// Get all zones and remove the mgmt port from each (prevent bleed-through)
-		zonesOut, _ := exec.Command("firewall-cmd", "--get-active-zones").Output()
-		for _, line := range strings.Split(string(zonesOut), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, " ") || strings.Contains(line, "interfaces") {
-				continue
-			}
-			zone := line
-			exec.Command("firewall-cmd", "--zone="+zone, "--remove-port="+port+"/tcp", "--permanent").Run()
+		// IPv4 direct rules
+		directRules := [][]string{
+			// Allow established/related so our own session isn't killed mid-lockdown
+			{"ipv4", "filter", "INPUT", "0", "-p", "tcp", "--dport", port, "-j", "ACCEPT"},
+			{"ipv4", "filter", "INPUT", "1", "-j", "DROP"},
+			{"ipv4", "filter", "OUTPUT", "0", "-p", "tcp", "--sport", port, "-j", "ACCEPT"},
+			{"ipv4", "filter", "OUTPUT", "1", "-j", "DROP"},
+			{"ipv4", "filter", "FORWARD", "0", "-j", "DROP"},
 		}
 
-		// Move all non-loopback interfaces into drop using --change-interface
-		ifaces, _ := net.Interfaces()
-		for _, iface := range ifaces {
-			if iface.Flags&net.FlagLoopback == 0 {
-				exec.Command("firewall-cmd", "--zone=drop",
-					"--change-interface="+iface.Name, "--permanent").Run()
-			}
+		// Mirror for IPv6
+		ip6Rules := [][]string{
+			{"ipv6", "filter", "INPUT", "0", "-p", "tcp", "--dport", port, "-j", "ACCEPT"},
+			{"ipv6", "filter", "INPUT", "1", "-j", "DROP"},
+			{"ipv6", "filter", "OUTPUT", "0", "-p", "tcp", "--sport", port, "-j", "ACCEPT"},
+			{"ipv6", "filter", "OUTPUT", "1", "-j", "DROP"},
+			{"ipv6", "filter", "FORWARD", "0", "-j", "DROP"},
 		}
 
-		// Add mgmt port only to drop
-		exec.Command("firewall-cmd", "--zone=drop", "--add-port="+port+"/tcp", "--permanent").Run()
-
-		if err := exec.Command("firewall-cmd", "--reload").Run(); err != nil {
-			return err
+		allRules := append(directRules, ip6Rules...)
+		for _, rule := range allRules {
+			args := append([]string{"--direct", "--add-rule"}, rule...)
+			exec.Command("firewall-cmd", args...).Run()
 		}
+
+		// if err := exec.Command("firewall-cmd", "--reload").Run(); err != nil {
+		// 	return err
+		// }
 
 	case Iptables:
 		// --- IPv4 ---
@@ -725,15 +730,29 @@ func RestoreFirewall(backupPath string) error {
 		}
 
 	case Firewalld:
-		exec.Command("firewall-cmd", "--set-default-zone=trusted").Run()
-		ifaces, _ := net.Interfaces()
-		for _, iface := range ifaces {
-			if iface.Flags&net.FlagLoopback == 0 {
-				exec.Command("firewall-cmd", "--zone=trusted",
-					"--change-interface="+iface.Name, "--permanent").Run()
+		rules := [][]string{
+			{"ipv4", "filter", "INPUT", "0", "-p", "tcp", "--dport", activePort, "-j", "ACCEPT"},
+			{"ipv4", "filter", "INPUT", "1", "-j", "DROP"},
+			{"ipv4", "filter", "OUTPUT", "0", "-p", "tcp", "--sport", activePort, "-j", "ACCEPT"},
+			{"ipv4", "filter", "OUTPUT", "1", "-j", "DROP"},
+			{"ipv4", "filter", "FORWARD", "0", "-j", "DROP"},
+
+			{"ipv6", "filter", "INPUT", "0", "-p", "tcp", "--dport", activePort, "-j", "ACCEPT"},
+			{"ipv6", "filter", "INPUT", "1", "-j", "DROP"},
+			{"ipv6", "filter", "OUTPUT", "0", "-p", "tcp", "--sport", activePort, "-j", "ACCEPT"},
+			{"ipv6", "filter", "OUTPUT", "1", "-j", "DROP"},
+			{"ipv6", "filter", "FORWARD", "0", "-j", "DROP"},
+		}
+
+		for _, rule := range rules {
+			args := append([]string{"--direct", "--remove-rule"}, rule...)
+			if err := exec.Command("firewall-cmd", args...).Run(); err != nil {
+				logEvent(fmt.Sprintf("WARN: failed to remove direct rule %v: %v", rule, err))
 			}
 		}
+
 		exec.Command("firewall-cmd", "--reload").Run()
+		logEvent("UNLOCK: firewalld direct rules removed and reloaded")
 
 	case Iptables:
 		// IPv4
@@ -766,14 +785,30 @@ func RestoreFromBackup(backupPath string) error {
     // --- firewalld: backup is a directory ---
     fwdBackup := filepath.Join(backupPath, "firewalld")
     if info, err := os.Stat(fwdBackup); err == nil && info.IsDir() {
-        if err := copyDir(fwdBackup, "/etc/firewalld"); err != nil {
-            return fmt.Errorf("firewalld config restore failed: %w", err)
-        }
-        if err := exec.Command("firewall-cmd", "--reload").Run(); err != nil {
-            return fmt.Errorf("firewalld reload failed: %w", err)
-        }
-        logEvent("RESTORE: firewalld config restored from backup directory")
-        return nil
+		
+		rules := [][]string{
+			{"ipv4", "filter", "INPUT", "0", "-p", "tcp", "--dport", activePort, "-j", "ACCEPT"},
+			{"ipv4", "filter", "INPUT", "1", "-j", "DROP"},
+			{"ipv4", "filter", "OUTPUT", "0", "-p", "tcp", "--sport", activePort, "-j", "ACCEPT"},
+			{"ipv4", "filter", "OUTPUT", "1", "-j", "DROP"},
+			{"ipv4", "filter", "FORWARD", "0", "-j", "DROP"},
+			
+			{"ipv6", "filter", "INPUT", "0", "-p", "tcp", "--dport", activePort, "-j", "ACCEPT"},
+			{"ipv6", "filter", "INPUT", "1", "-j", "DROP"},
+			{"ipv6", "filter", "OUTPUT", "0", "-p", "tcp", "--sport", activePort, "-j", "ACCEPT"},
+			{"ipv6", "filter", "OUTPUT", "1", "-j", "DROP"},
+			{"ipv6", "filter", "FORWARD", "0", "-j", "DROP"},
+		}
+
+		for _, rule := range rules {
+			args := append([]string{"--direct", "--remove-rule"}, rule...)
+			if err := exec.Command("firewall-cmd", args...).Run(); err != nil {
+				logEvent(fmt.Sprintf("WARN: failed to remove direct rule %v: %v", rule, err))
+			}
+		}
+
+		exec.Command("firewall-cmd", "--reload").Run()
+		logEvent("UNLOCK: firewalld direct rules removed and reloaded")
     }
 
     // --- flat file: iptables-save or nft dump ---
@@ -791,7 +826,19 @@ func RestoreFromBackup(backupPath string) error {
     payload := lines[1]
 
     switch kind {
-    case "ufw", "iptables":
+	case "ufw":
+		ufwBackup := filepath.Join(filepath.Dir(backupPath), "ufw_backup")
+		if _, err := os.Stat(ufwBackup); err == nil {
+			if err := copyDir(ufwBackup, "/etc/ufw"); err != nil {
+				return fmt.Errorf("ufw file restore failed: %w", err)
+			}
+			exec.Command("ufw", "--force", "enable").Run()
+			exec.Command("ufw", "reload").Run()
+			logEvent("RESTORE: UFW rules restored from file backup")
+			return nil
+		}
+		return fmt.Errorf("ufw backup directory not found")
+    case "iptables":
         cmd := exec.Command("iptables-restore")
         cmd.Stdin = strings.NewReader(payload)
         if err := cmd.Run(); err != nil {
@@ -858,7 +905,19 @@ func backupFirewall(backupPath string) error {
 		var prefix string
 
 		switch fw {
-		case UFW, Iptables:
+		case UFW:
+			out, err = exec.Command("iptables-save").Output()
+			prefix = string(fw) + "\n"
+
+			if err == nil {
+				src := "/etc/ufw"
+				dst := filepath.Join(filepath.Dir(backupPath), "ufw_backup")
+				if _, err := os.Stat(dst); err == nil {
+					logEvent("BACKUP: ufw backup already exists, skipping")
+				}
+				err = copyDir(src, dst)
+			}
+		case Iptables:
 			out, err = exec.Command("iptables-save").Output()
 			prefix = string(fw) + "\n"
 		case Nftables:

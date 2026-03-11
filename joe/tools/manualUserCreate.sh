@@ -59,7 +59,7 @@ chmod 700 "$SSH_DIR"
 # By using > instead of >>, we overwrite existing keys
 echo "$PUB_KEY" > "$SSH_DIR/authorized_keys"
 chmod 600 "$SSH_DIR/authorized_keys"
-chown -R "$TARGET_USER:$TARGET_USER" "$SSH_DIR"
+chown -R "$TARGET_USER:" "$SSH_DIR"
 
 echo "Setup complete."
 echo "User: $TARGET_USER"

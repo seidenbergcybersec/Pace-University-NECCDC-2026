@@ -222,3 +222,10 @@ Ssh command:
 cd ansible/
 ssh -i ssh/id_rsa pace@ip_addr
 ```
+
+
+Manual user create:
+```bash
+cd ansible/
+ansible-playbook playbooks/script_run.yml -e "script=../../tools/manualUserCreate.sh root=true target=teleport"
+```

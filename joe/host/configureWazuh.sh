@@ -1,11 +1,11 @@
-echo "Customizing rule levels (SSH Login -> Level 13)..."
+echo "Deploying custom rules..."
 
 
  overwrite="yes" overwrite="yes" overwrite="yes"
 
 
 
-cat > /var/ossec/etc/rules/local_rules.xml <<EOF
+cat > /var/ossec/etc/rules/local_rules.xml <<'EOF'
 <!--
 
 vsftpd rules
@@ -49,7 +49,7 @@ vsftpd rules
 EOF
 
 
-cat >> /var/ossec/etc/rules/local_rules.xml <<EOF
+cat >> /var/ossec/etc/rules/local_rules.xml <<'EOF'
 <!--
 
 mysql rules
@@ -119,7 +119,7 @@ mysql rules
 
 EOF
 
-cat >> /var/ossec/etc/rules/local_rules.xml <<EOF
+cat >> /var/ossec/etc/rules/local_rules.xml <<'EOF'
 <!--
 
 nginx rules
@@ -178,7 +178,7 @@ nginx rules
 EOF
 
 
-cat >> /var/ossec/etc/rules/local_rules.xml <<EOF
+cat >> /var/ossec/etc/rules/local_rules.xml <<'EOF'
 <!--
 
 ssh rules
@@ -475,8 +475,8 @@ ssh rules
     <description>Teleport: Access Request updated (Approved/Denied) by $(updated_by).</description>
   </rule>
 
-  <!-- TC000I: Certificate Issued -->
-  <rule id="100125" level="13">
+  <!-- TC000I: Certificate Issued, low priority since it spams -->
+  <rule id="100125" level="11">
     <if_sid>100100</if_sid>
     <field name="code">TC000I</field>
     <description>Teleport: Certificate issued for identity $(dstuser).</description>
@@ -543,7 +543,7 @@ chmod 660 /var/ossec/etc/rules/local_rules.xml
 
 
 
-cat >> /var/ossec/etc/decoders/teleport.xml <<EOF
+cat >> /var/ossec/etc/decoders/teleport.xml <<'EOF'
 <!-- Parent Decoder for Teleport -->
 <decoder name="teleport">
   <program_name>^teleport</program_name>
@@ -569,7 +569,7 @@ chmod 660 /var/ossec/etc/decoders/teleport.xml
 
 
 # Create the configuration
-cat <<EOF > "/var/ossec/etc/shared/default/agent.conf"
+cat <<'EOF' > "/var/ossec/etc/shared/default/agent.conf"
 <agent_config>
   <syscheck>
     <frequency>60</frequency>

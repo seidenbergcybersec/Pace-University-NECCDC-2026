@@ -2,7 +2,7 @@
 
 # --- DYNAMIC CONFIGURATION ---
 # Default fallback address
-DEFAULT_AUTH="teleport.15.chefops.tech:3080"
+DEFAULT_AUTH="teleport.15.chefops.tech:3025"
 
 # Check if an address was passed as the first argument
 if [ -n "$1" ]; then

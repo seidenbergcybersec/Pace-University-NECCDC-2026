@@ -209,7 +209,11 @@ Resulting achive will be in ansible/results/target/
 Install wazuh on host by running:
 ```bash
 cd host
-./wazuh.sh
+sudo ./wazuh.sh # installs wazuh
+sudo ./configureWazuh.sh # adds custom ruels for teleport and etc. CRITICAL
+
+cd wazuhDiscord
+sudo ./configureDiscord.sh # adds a webhook for discord
 ```
 
 

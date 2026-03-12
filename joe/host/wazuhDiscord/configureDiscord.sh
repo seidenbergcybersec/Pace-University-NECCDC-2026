@@ -40,19 +40,28 @@ fi
 echo -e "${GREEN}Updating $OSSEC_CONF...${NC}"
 
 # Create backup
-cp $OSSEC_CONF "$OSSEC_CONF.bak_$(date +%F_%H-%M-%S)"
+cp "$OSSEC_CONF" "$OSSEC_CONF.bak_$(date +%F_%H-%M-%S)"
 
 # Check if integration already exists to avoid duplicates
-if grep -q "custom-discord" "$OSSEC_CONF"; then
-    echo -e "${RED}Integration 'custom-discord' already exists in ossec.conf. Skipping XML injection.${NC}"
+if grep -q "<name>custom-discord</name>" "$OSSEC_CONF"; then
+    echo -e "${RED}Integration 'custom-discord' already exists. Skipping injection.${NC}"
 else
-    # Insert the integration block after the </global> tag
-    sed -i "/<\/global>/a \\
- <integration>\\
-     <name>custom-discord</name>\\
-     <hook_url>$WEBHOOK_URL</hook_url>\\
-     <alert_format>json</alert_format>\\
- </integration>" "$OSSEC_CONF"
+    # Use awk to insert ONLY after the first occurrence of </global>
+    awk -v url="$WEBHOOK_URL" '
+    /<\/global>/ && !done {
+        print $0
+        print "  <integration>"
+        print "    <name>custom-discord</name>"
+        print "    <hook_url>" url "</hook_url>"
+        print "    <alert_format>json</alert_format>"
+        print "  </integration>"
+        done = 1
+        next
+    }
+    { print }
+    ' "$OSSEC_CONF" > "$OSSEC_CONF.tmp" && mv "$OSSEC_CONF.tmp" "$OSSEC_CONF"
+    
+    echo -e "${GREEN}Integration added successfully.${NC}"
 fi
 
 # 5. Copy integration files and set permissions

@@ -1,10 +1,6 @@
 echo "Deploying custom rules..."
 
 
- overwrite="yes" overwrite="yes" overwrite="yes"
-
-
-
 cat > /var/ossec/etc/rules/local_rules.xml <<'EOF'
 <!--
 
@@ -335,42 +331,42 @@ ssh rules
   </rule>
 
   <!-- T1004I: User deleted -->
-  <rule id="100107" level="13">
+  <rule id="100108" level="13">
     <if_sid>100100</if_sid>
     <field name="code">T1004I</field>
     <description>Teleport: User deleted: $(name). By $(dstuser)</description>
   </rule>
 
   <!-- T1003I: User updated -->
-  <rule id="100107" level="13">
+  <rule id="100109" level="13">
     <if_sid>100100</if_sid>
     <field name="code">T1003I</field>
     <description>Teleport: User updated: $(name)</description>
   </rule>
 
   <!-- T1005I: User Password Updated -->
-  <rule id="100108" level="13">
+  <rule id="100110" level="13">
     <if_sid>100100</if_sid>
     <field name="code">T1005I</field>
     <description>Teleport: Password updated for user $(dstuser).</description>
   </rule>
 
   <!-- T6000I: Reset Password Token Created -->
-  <rule id="100109" level="13">
+  <rule id="100111" level="13">
     <if_sid>100100</if_sid>
     <field name="code">T6000I</field>
     <description>Teleport: Password reset token generated for user $(dstuser).</description>
   </rule>
 
   <!-- T9000I: User Role Created -->
-  <rule id="100110" level="13">
+  <rule id="100112" level="13">
     <if_sid>100100</if_sid>
     <field name="code">T9000I</field>
     <description>Teleport: New security role created by $(dstuser).</description>
   </rule>
 
   <!-- T9002I: User Role Updated -->
-  <rule id="100111" level="13">
+  <rule id="100113" level="13">
     <if_sid>100100</if_sid>
     <field name="code">T9002I</field>
     <description>Teleport: Security role updated by $(dstuser).</description>
@@ -381,49 +377,49 @@ ssh rules
   <!-- ############################################ -->
 
   <!-- T7000I: Trusted Cluster Created -->
-  <rule id="100112" level="13">
+  <rule id="100114" level="13">
     <if_sid>100100</if_sid>
     <field name="code">T7000I</field>
     <description>Teleport: New Trusted Cluster established by $(dstuser).</description>
   </rule>
 
   <!-- TJT00I: Join Token Created -->
-  <rule id="100113" level="13">
+  <rule id="100115" level="13">
     <if_sid>100100</if_sid>
     <field name="code">TJT00I</field>
     <description>Teleport: Node/Service join token created by $(dstuser).</description>
   </rule>
 
   <!-- TB001I: Bot Created -->
-  <rule id="100114" level="13">
+  <rule id="100116" level="13">
     <if_sid>100100</if_sid>
     <field name="code">TB001I</field>
     <description>Teleport: Machine ID Bot "$(name)" created by $(dstuser).</description>
   </rule>
 
   <!-- TJ001I: Bot Joined (Success) -->
-  <rule id="100115" level="13">
+  <rule id="100117" level="13">
     <if_sid>100100</if_sid>
     <field name="code">TJ001I</field>
     <description>Teleport: Bot joined cluster successfully using method $(method).</description>
   </rule>
 
   <!-- TJ001E: Bot Join Failed -->
-  <rule id="100116" level="13">
+  <rule id="100118" level="13">
     <if_sid>100100</if_sid>
     <field name="code">TJ001E</field>
     <description>Teleport: Bot join failed. Error: $(error)</description>
   </rule>
 
   <!-- TJ002I: Instance Joined -->
-  <rule id="100117" level="13">
+  <rule id="100119" level="13">
     <if_sid>100100</if_sid>
     <field name="code">TJ002I</field>
     <description>Teleport: New instance joined the cluster: $(node_name).</description>
   </rule>
 
   <!-- TJ002E: Instance Join Failed -->
-  <rule id="100118" level="13">
+  <rule id="100120" level="13">
     <if_sid>100100</if_sid>
     <field name="code">TJ002E</field>
     <description>Teleport: Instance join failed for $(node_name).</description>
@@ -434,56 +430,56 @@ ssh rules
   <!-- ############################################ -->
 
   <!-- TAP03I: Application Created -->
-  <rule id="100119" level="13">
+  <rule id="100121" level="13">
     <if_sid>100100</if_sid>
     <field name="code">TAP03I</field>
     <description>Teleport: Dynamic application resource "$(name)" created by $(dstuser).</description>
   </rule>
 
   <!-- TAP05I: Application Deleted -->
-  <rule id="100120" level="13">
+  <rule id="100122" level="13">
     <if_sid>100100</if_sid>
     <field name="code">TAP05I</field>
     <description>Teleport: Dynamic application resource "$(name)" deleted by $(dstuser).</description>
   </rule>
 
   <!-- TDB05I: Database Deleted -->
-  <rule id="100121" level="13">
+  <rule id="100123" level="13">
     <if_sid>100100</if_sid>
     <field name="code">TDB05I</field>
     <description>Teleport: Database resource "$(name)" removed from cluster by $(dstuser).</description>
   </rule>
 
   <!-- TS001I: SFTP Open -->
-  <rule id="100122" level="13">
+  <rule id="100124" level="13">
     <if_sid>100100</if_sid>
     <field name="code">TS001I</field>
     <description>Teleport: SFTP session opened by user $(dstuser) on path $(path).</description>
   </rule>
 
   <!-- T3005I: SCP Upload -->
-  <rule id="100123" level="13">
+  <rule id="100125" level="13">
     <if_sid>100100</if_sid>
     <field name="code">T3005I</field>
     <description>Teleport: File upload (SCP) detected. User: $(dstuser), Path: $(path).</description>
   </rule>
 
   <!-- T5001I: Access Request Updated -->
-  <rule id="100124" level="13">
+  <rule id="100126" level="13">
     <if_sid>100100</if_sid>
     <field name="code">T5001I</field>
     <description>Teleport: Access Request updated (Approved/Denied) by $(updated_by).</description>
   </rule>
 
   <!-- TC000I: Certificate Issued, low priority since it spams -->
-  <rule id="100125" level="11">
+  <rule id="100127" level="5">
     <if_sid>100100</if_sid>
     <field name="code">TC000I</field>
     <description>Teleport: Certificate issued for identity $(dstuser).</description>
   </rule>
 
   <!-- TV005I: Device Enrolled -->
-  <rule id="100126" level="13">
+  <rule id="100128" level="13">
     <if_sid>100100</if_sid>
     <field name="code">TV005I</field>
     <description>Teleport: Trusted device enrolled by user $(dstuser).</description>
@@ -494,21 +490,21 @@ ssh rules
   <!-- ############################################ -->
 
   <!-- TLK00I: Lock Created -->
-  <rule id="100127" level="13">
+  <rule id="100129" level="13">
     <if_sid>100100</if_sid>
     <field name="code">TLK00I</field>
-    <description>Teleport: Session/User Lock created by $(dstuser). Access restricted.</description>
+    <description>Teleport: Session/User Lock created for(or by) $(dstuser). Access restricted.</description>
   </rule>
 
   <!-- TLK01I: Lock Deleted -->
-  <rule id="100128" level="13">
+  <rule id="100130" level="13">
     <if_sid>100100</if_sid>
     <field name="code">TLK01I</field>
-    <description>Teleport: Session/User Lock removed by $(dstuser).</description>
+    <description>Teleport: Session/User Lock removed for(or by) $(dstuser).</description>
   </rule>
 
   <!-- TEA002I: External Audit Storage Disabled -->
-  <rule id="100129" level="13">
+  <rule id="100131" level="13">
     <if_sid>100100</if_sid>
     <field name="code">TEA002I</field>
     <description>Teleport: CRITICAL - External Audit Storage has been DISABLED by $(dstuser).</description>
@@ -543,7 +539,7 @@ chmod 660 /var/ossec/etc/rules/local_rules.xml
 
 
 
-cat >> /var/ossec/etc/decoders/teleport.xml <<'EOF'
+cat > /var/ossec/etc/decoders/teleport.xml <<'EOF'
 <!-- Parent Decoder for Teleport -->
 <decoder name="teleport">
   <program_name>^teleport</program_name>
